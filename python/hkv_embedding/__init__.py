@@ -16,18 +16,21 @@ except ImportError as e:
 # 导入Python层的封装
 from .hkvembedding import HierarchicalHashEmbedding
 from .utils import *
+from .optimizer import HKVOptimizer, HKVAdamOptimizer
 
 __version__ = "1.0.0"
 __author__ = "HKV Team"
 
 __all__ = [
     "HierarchicalHashEmbedding",
-    "hash_ids",
     "HashTable", 
     "Int64HashTable",
     "version",
+    "hash_ids",
     "create_hashtable",
     "create_embedding",
+    "HKVOptimizer",
+    "HKVAdamOptimizer",
 ]
 
 def create_hashtable(init_capacity, max_capacity, embedding_dim, max_hbm_gb=16, key_type="uint64"):
