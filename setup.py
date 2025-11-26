@@ -117,13 +117,13 @@ setup(
         "pybind11>=2.6.0",
     ],
     extras_require={
-        "pytorch": [
-            "torch>=1.9.0,<3.0.0",  # 放宽版本范围
-        ],
-        "pytorch-cu121": [
-            "torch>=2.0.0,<3.0.0",
+        # "pytorch": [
+        #     "torch>=1.9.0,<3.0.0",  # 放宽版本范围
+        # ],
+        # "pytorch-cu121": [
+        #     "torch>=2.0.0,<3.0.0",
             
-        ],
+        # ],
         "dev": [
             "pytest>=6.0",
             "pytest-cov",
