@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include requirements.txt
+recursive-include include *.hpp *.h
+recursive-include src *.cu *.cpp *.h
+recursive-include python *.py
+recursive-include tests *.py
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .git*
+global-exclude build
+global-exclude dist
