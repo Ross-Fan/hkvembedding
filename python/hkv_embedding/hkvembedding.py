@@ -4,30 +4,197 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple, Union
 from . import hkv_core
 
+
+class GradientBuffer:
+    """
+    GPU-backed gradient buffer using HKV for scalable gradient accumulation.
+    Stores gradients directly in GPU memory via HKV hash table.
+    """
+    
+    def __init__(self, embedding_dim: int, max_capacity: int, max_hbm_gb: int = 1):
+        """
+        Initialize GPU-backed gradient buffer.
+        
+        Args:
+            embedding_dim: Dimension of embeddings (and gradients)
+            max_capacity: Maximum number of unique keys to track
+            max_hbm_gb: Maximum HBM for gradient storage
+        """
+        self.embedding_dim = embedding_dim
+        # Store gradients: each entry is [grad (dim), count (1)] = dim + 1
+        self.grad_dim = embedding_dim + 1  # extra dimension for count
+        
+        try:
+            self.grad_table = hkv_core.HashTable(
+                max_capacity // 10,  # init capacity
+                max_capacity,
+                self.grad_dim,
+                max_hbm_gb
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to create gradient buffer: {e}")
+        
+        self._pending_keys = set()  # Track which keys have gradients
+    
+    def accumulate(self, keys: np.ndarray, gradients: np.ndarray):
+        """
+        Accumulate gradients for given keys on GPU.
+        
+        Args:
+            keys: uint64 array of keys
+            gradients: float32 array of gradients [N, embedding_dim]
+        """
+        if len(keys) == 0:
+            return
+        
+        batch_size = len(keys)
+        
+        # Get existing gradients (or zeros for new keys)
+        existing_data, _ = self.grad_table.find_or_insert(keys)
+        existing_data = existing_data.reshape(batch_size, self.grad_dim)
+        
+        # Split into gradients and counts
+        existing_grads = existing_data[:, :self.embedding_dim]
+        existing_counts = existing_data[:, -1:]
+        
+        # Accumulate new gradients and increment counts
+        new_grads = existing_grads + gradients.reshape(batch_size, self.embedding_dim)
+        new_counts = existing_counts + 1.0
+        
+        # Combine and update
+        new_data = np.concatenate([new_grads, new_counts], axis=1).astype(np.float32)
+        self.grad_table.insert_or_assign(keys, new_data.flatten())
+        
+        # Track keys
+        self._pending_keys.update(keys.tolist())
+    
+    def get_averaged_gradients(self, keys: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Get averaged gradients for keys.
+        
+        Returns:
+            Tuple of (averaged_gradients, valid_mask)
+        """
+        if len(keys) == 0:
+            return np.array([]).reshape(0, self.embedding_dim), np.array([], dtype=bool)
+        
+        batch_size = len(keys)
+        data, found = self.grad_table.find(keys)
+        data = data.reshape(batch_size, self.grad_dim)
+        
+        grads = data[:, :self.embedding_dim]
+        counts = data[:, -1:].clip(min=1.0)  # Avoid division by zero
+        
+        averaged = grads / counts
+        valid = found & (data[:, -1] > 0)
+        
+        return averaged.astype(np.float32), valid
+    
+    def get_all_pending_keys(self) -> np.ndarray:
+        """Get all keys with pending gradients."""
+        return np.array(list(self._pending_keys), dtype=np.uint64)
+    
+    def clear(self):
+        """Clear all accumulated gradients."""
+        self.grad_table.clear()
+        self._pending_keys.clear()
+    
+    def size(self) -> int:
+        """Get number of keys with gradients."""
+        return len(self._pending_keys)
+
+
+class AdamStateBuffer:
+    """
+    GPU-backed Adam optimizer state buffer using HKV.
+    Stores m (first moment) and v (second moment) in HKV tables.
+    """
+    
+    def __init__(self, embedding_dim: int, max_capacity: int, max_hbm_gb: int = 2):
+        """
+        Initialize Adam state buffer.
+        
+        Args:
+            embedding_dim: Dimension of embeddings
+            max_capacity: Maximum number of unique keys
+            max_hbm_gb: Maximum HBM for state storage
+        """
+        self.embedding_dim = embedding_dim
+        
+        try:
+            # Table for first moment (m)
+            self.m_table = hkv_core.HashTable(
+                max_capacity // 10,
+                max_capacity,
+                embedding_dim,
+                max_hbm_gb // 2 or 1
+            )
+            
+            # Table for second moment (v)
+            self.v_table = hkv_core.HashTable(
+                max_capacity // 10,
+                max_capacity,
+                embedding_dim,
+                max_hbm_gb // 2 or 1
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to create Adam state buffer: {e}")
+    
+    def get_states(self, keys: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Get m and v states for keys (creates zeros for new keys).
+        
+        Returns:
+            Tuple of (m_states, v_states) both shaped [N, embedding_dim]
+        """
+        if len(keys) == 0:
+            return (np.array([]).reshape(0, self.embedding_dim),
+                    np.array([]).reshape(0, self.embedding_dim))
+        
+        batch_size = len(keys)
+        
+        m_data, _ = self.m_table.find_or_insert(keys)
+        v_data, _ = self.v_table.find_or_insert(keys)
+        
+        return (m_data.reshape(batch_size, self.embedding_dim),
+                v_data.reshape(batch_size, self.embedding_dim))
+    
+    def update_states(self, keys: np.ndarray, m_new: np.ndarray, v_new: np.ndarray):
+        """Update m and v states for keys."""
+        if len(keys) == 0:
+            return
+        
+        self.m_table.insert_or_assign(keys, m_new.flatten().astype(np.float32))
+        self.v_table.insert_or_assign(keys, v_new.flatten().astype(np.float32))
+    
+    def clear(self):
+        """Clear all states."""
+        self.m_table.clear()
+        self.v_table.clear()
+
+
 class HKVEmbeddingFunction(torch.autograd.Function):
     """
-    HKV Embedding的自定义autograd函数
-    支持前向传播和反向传播
+    HKV Embedding custom autograd function.
+    Supports forward and backward propagation with GPU-backed gradient accumulation.
     """
     
     @staticmethod
     def forward(ctx, indices, embedding_layer):
         """
-        前向传播
+        Forward pass.
         
         Args:
-            ctx: autograd上下文
-            indices: 输入的索引张量
-            embedding_layer: HierarchicalHashEmbedding实例
+            ctx: autograd context
+            indices: input index tensor
+            embedding_layer: HierarchicalHashEmbedding instance
         
         Returns:
-            embeddings: 嵌入向量
+            embeddings: embedding tensor
         """
-        # 保存上下文信息用于反向传播
         ctx.embedding_layer = embedding_layer
         ctx.save_for_backward(indices)
         
-        # 执行前向传播
         with torch.no_grad():
             embeddings = embedding_layer._forward_impl(indices)
         
@@ -36,27 +203,21 @@ class HKVEmbeddingFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         """
-        反向传播
-        
-        Args:
-            ctx: autograd上下文
-            grad_output: 输出的梯度
-        
-        Returns:
-            tuple: (indices的梯度, embedding_layer的梯度)
+        Backward pass - accumulates gradients in GPU-backed buffer.
         """
         indices, = ctx.saved_tensors
         embedding_layer = ctx.embedding_layer
         
-        # 累积梯度到embedding层
+        # Accumulate gradients to GPU buffer
         embedding_layer._accumulate_gradients(indices, grad_output)
         
-        # indices不需要梯度，embedding_layer也不需要梯度（参数更新通过内部机制）
         return None, None
+
 
 class HierarchicalHashEmbedding(nn.Module):
     """
-    基于HierarchicalKV的PyTorch嵌入层，支持自动微分
+    PyTorch embedding layer based on HierarchicalKV with automatic differentiation.
+    Designed for large-scale recommendation systems with billions of unique IDs.
     """
     
     def __init__(self, 
@@ -68,20 +229,22 @@ class HierarchicalHashEmbedding(nn.Module):
                  dtype: torch.dtype = torch.float32,
                  init_std: float = None,
                  learning_rate: float = 0.01,
-                 weight_decay: float = 0.0):
+                 weight_decay: float = 0.0,
+                 grad_buffer_hbm_gb: int = 1):
         """
-        初始化HierarchicalHashEmbedding
+        Initialize HierarchicalHashEmbedding.
         
         Args:
-            embedding_dim: 嵌入向量维度
-            max_capacity: 最大容量
-            init_capacity: 初始容量
-            max_hbm_gb: 最大GPU内存使用量(GB)
-            device: 设备类型
-            dtype: 数据类型
-            init_std: 初始化标准差
-            learning_rate: 学习率
-            weight_decay: 权重衰减
+            embedding_dim: Embedding vector dimension
+            max_capacity: Maximum capacity
+            init_capacity: Initial capacity
+            max_hbm_gb: Maximum GPU memory usage (GB) for embeddings
+            device: Device type
+            dtype: Data type
+            init_std: Initialization standard deviation
+            learning_rate: Learning rate for built-in optimizer
+            weight_decay: Weight decay
+            grad_buffer_hbm_gb: GPU memory for gradient buffer (GB)
         """
         super().__init__()
         
@@ -94,7 +257,7 @@ class HierarchicalHashEmbedding(nn.Module):
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         
-        # 创建HKV哈希表
+        # Create HKV hash table for embeddings
         try:
             self.hashtable = hkv_core.HashTable(
                 init_capacity, max_capacity, embedding_dim, max_hbm_gb
@@ -102,27 +265,33 @@ class HierarchicalHashEmbedding(nn.Module):
         except Exception as e:
             raise RuntimeError(f"Failed to create HashTable: {e}")
         
-        # 梯度累积器
-        self.gradient_accumulator = {}  # key -> gradient tensor
-        self.gradient_count = {}        # key -> count for averaging
+        # GPU-backed gradient buffer (replaces Python dict)
+        self.grad_buffer = GradientBuffer(
+            embedding_dim=embedding_dim,
+            max_capacity=max_capacity,
+            max_hbm_gb=grad_buffer_hbm_gb
+        )
         
-        # 统计信息
+        # Statistics
         self.hit_count = 0
         self.miss_count = 0
         self.total_queries = 0
         
-        # 注册为模块参数（用于优化器识别）
+        # Track keys seen in current forward pass (for initialization)
+        self._current_batch_new_keys = None
+        
+        # Register dummy parameter for PyTorch compatibility
         self.register_buffer('_dummy_param', torch.zeros(1, requires_grad=False))
     
     def forward(self, indices):
         """
-        前向传播（支持自动微分）
+        Forward pass with automatic differentiation.
         
         Args:
-            indices: 输入索引张量
+            indices: Input index tensor
             
         Returns:
-            embeddings: 嵌入向量张量
+            embeddings: Embedding tensor
         """
         if indices.numel() == 0:
             return torch.empty(0, self.embedding_dim, dtype=self.dtype, device=self.device)
@@ -130,10 +299,10 @@ class HierarchicalHashEmbedding(nn.Module):
         original_shape = indices.shape
         indices_flat = indices.flatten()
         
-        # 使用自定义autograd函数
+        # Use custom autograd function
         embeddings = HKVEmbeddingFunction.apply(indices_flat, self)
         
-        # 恢复原始形状
+        # Restore original shape
         if len(original_shape) == 1:
             return embeddings
         else:
@@ -141,152 +310,143 @@ class HierarchicalHashEmbedding(nn.Module):
     
     def _forward_impl(self, indices):
         """
-        实际的前向传播实现
+        Actual forward implementation.
         
         Args:
-            indices: 扁平化的索引张量
+            indices: Flattened index tensor
             
         Returns:
-            embeddings: 嵌入向量张量
+            embeddings: Embedding tensor
         """
-        # 转换为numpy数组
+        # Convert to numpy
         indices_np = indices.cpu().numpy().astype(np.uint64)
         
+        # First, check which keys exist
         try:
-            # 调用HKV查找或插入
-            embeddings_np, found_flags = self.hashtable.find_or_insert(indices_np)
+            embeddings_np, found_flags = self.hashtable.find(indices_np)
         except Exception as e:
-            raise RuntimeError(f"HKV find_or_insert failed: {e}")
+            raise RuntimeError(f"HKV find failed: {e}")
         
-        # 转换回PyTorch张量
+        # Convert to PyTorch tensor
         embeddings = torch.from_numpy(embeddings_np).to(
             device=self.device, dtype=self.dtype
         )
         
-        # 处理新插入的键
+        # Handle new keys (not found)
         found_tensor = torch.from_numpy(found_flags)
         new_mask = ~found_tensor
         
         if new_mask.any():
-            # 随机初始化新嵌入
+            num_new = new_mask.sum().item()
+            
+            # Random initialization for new embeddings
             new_embeddings = torch.randn(
-                new_mask.sum(), self.embedding_dim,
+                num_new, self.embedding_dim,
                 device=self.device, dtype=self.dtype
             ) * self.init_std
             
             embeddings[new_mask] = new_embeddings
             
-            # 更新到哈希表
-            self._update_embeddings_impl(indices[new_mask], new_embeddings)
+            # Insert new embeddings into hash table
+            new_keys = indices_np[new_mask.numpy()]
+            self._update_embeddings_impl(
+                torch.from_numpy(new_keys), 
+                new_embeddings
+            )
+            
+            self.miss_count += num_new
         
-        # 更新统计
+        # Update statistics
         self.hit_count += found_flags.sum()
-        self.miss_count += len(found_flags) - found_flags.sum()
         self.total_queries += len(found_flags)
         
         return embeddings
     
-    def _accumulate_gradients(self, indices, grad_output):
+    def _accumulate_gradients(self, indices: torch.Tensor, grad_output: torch.Tensor):
         """
-        累积梯度
+        Accumulate gradients using GPU-backed buffer.
         
         Args:
-            indices: 索引张量
-            grad_output: 输出梯度
+            indices: Index tensor
+            grad_output: Output gradients
         """
         if grad_output is None or indices.numel() == 0:
             return
         
-        # 确保梯度在CPU上进行累积（避免GPU内存碎片）
-        indices_cpu = indices.cpu()
-        grad_cpu = grad_output.detach().cpu()
+        # Convert to numpy for HKV
+        indices_np = indices.cpu().numpy().astype(np.uint64)
+        grad_np = grad_output.detach().cpu().numpy().astype(np.float32)
         
-        # 按索引累积梯度
-        for i, idx in enumerate(indices_cpu):
-            idx_item = idx.item()
-            
-            if idx_item in self.gradient_accumulator:
-                self.gradient_accumulator[idx_item] += grad_cpu[i]
-                self.gradient_count[idx_item] += 1
-            else:
-                self.gradient_accumulator[idx_item] = grad_cpu[i].clone()
-                self.gradient_count[idx_item] = 1
+        # Accumulate to GPU buffer
+        self.grad_buffer.accumulate(indices_np, grad_np)
     
     def step(self):
         """
-        执行一步梯度更新（类似optimizer.step()）
+        Execute one gradient update step (like optimizer.step()).
+        Uses SGD with optional weight decay.
         """
-        if not self.gradient_accumulator:
+        pending_keys = self.grad_buffer.get_all_pending_keys()
+        
+        if len(pending_keys) == 0:
             return
         
-        # 准备批量更新
-        keys = []
-        gradients = []
+        # Get averaged gradients
+        avg_grads, valid_mask = self.grad_buffer.get_averaged_gradients(pending_keys)
         
-        for key, grad in self.gradient_accumulator.items():
-            # 平均梯度
-            avg_grad = grad / self.gradient_count[key]
-            
-            # 应用权重衰减
-            if self.weight_decay > 0:
-                # 获取当前嵌入
-                current_embedding = self._get_embedding(key)
-                if current_embedding is not None:
-                    avg_grad += self.weight_decay * current_embedding
-            
-            keys.append(key)
-            gradients.append(avg_grad)
+        if not valid_mask.any():
+            self.grad_buffer.clear()
+            return
         
-        if keys:
-            # 批量更新嵌入
-            self._update_embeddings_with_gradients(keys, gradients)
+        # Filter to valid keys
+        valid_keys = pending_keys[valid_mask]
+        valid_grads = avg_grads[valid_mask]
         
-        # 清空梯度累积器
-        self.gradient_accumulator.clear()
-        self.gradient_count.clear()
+        # Get current embeddings
+        current_embeddings, found = self.hashtable.find(valid_keys)
+        current_embeddings = current_embeddings.reshape(-1, self.embedding_dim)
+        
+        # Apply weight decay if specified
+        if self.weight_decay > 0:
+            valid_grads = valid_grads + self.weight_decay * current_embeddings
+        
+        # SGD update: embedding = embedding - lr * grad
+        updated_embeddings = current_embeddings - self.learning_rate * valid_grads
+        
+        # Update hash table
+        self.hashtable.insert_or_assign(
+            valid_keys, 
+            updated_embeddings.flatten().astype(np.float32)
+        )
+        
+        # Clear gradient buffer
+        self.grad_buffer.clear()
     
-    def _get_embedding(self, key):
-        """获取单个key的嵌入向量"""
-        try:
-            keys_np = np.array([key], dtype=np.uint64)
-            embeddings_np, found = self.hashtable.find(keys_np)
-            if found[0]:
-                return torch.from_numpy(embeddings_np[0])
-            return None
-        except:
-            return None
-    
-    def _update_embeddings_with_gradients(self, keys, gradients):
+    def apply_updates(self, keys: np.ndarray, updates: np.ndarray):
         """
-        使用梯度更新嵌入向量
+        Apply precomputed updates to embeddings (used by external optimizers).
         
         Args:
-            keys: 键列表
-            gradients: 梯度列表
+            keys: uint64 array of keys
+            updates: float32 array of update values [N, embedding_dim]
         """
-        try:
-            # 获取当前嵌入
-            keys_np = np.array(keys, dtype=np.uint64)
-            current_embeddings_np, found = self.hashtable.find(keys_np)
-            
-            # 转换为torch张量
-            current_embeddings = torch.from_numpy(current_embeddings_np)
-            
-            # 应用梯度更新
-            updated_embeddings = current_embeddings.clone()
-            for i, (key, grad) in enumerate(zip(keys, gradients)):
-                if found[i]:  # 只更新存在的键
-                    updated_embeddings[i] -= self.learning_rate * grad
-            
-            # 更新回哈希表
-            updated_embeddings_np = updated_embeddings.numpy().astype(np.float32)
-            self.hashtable.insert_or_assign(keys_np, updated_embeddings_np)
-            
-        except Exception as e:
-            print(f"Warning: Failed to update embeddings with gradients: {e}")
+        if len(keys) == 0:
+            return
+        
+        # Get current embeddings
+        current_embeddings, found = self.hashtable.find(keys)
+        current_embeddings = current_embeddings.reshape(-1, self.embedding_dim)
+        
+        # Apply updates: embedding = embedding - update
+        updated_embeddings = current_embeddings - updates.reshape(-1, self.embedding_dim)
+        
+        # Update hash table
+        self.hashtable.insert_or_assign(
+            keys,
+            updated_embeddings.flatten().astype(np.float32)
+        )
     
-    def _update_embeddings_impl(self, indices, embeddings):
-        """更新哈希表中的嵌入向量（内部实现）"""
+    def _update_embeddings_impl(self, indices: torch.Tensor, embeddings: torch.Tensor):
+        """Update embeddings in hash table (internal implementation)."""
         if indices.numel() == 0:
             return
             
@@ -294,27 +454,53 @@ class HierarchicalHashEmbedding(nn.Module):
         embeddings_np = embeddings.detach().cpu().numpy().astype(np.float32)
         
         try:
-            self.hashtable.insert_or_assign(indices_np, embeddings_np)
+            self.hashtable.insert_or_assign(indices_np, embeddings_np.flatten())
         except Exception as e:
             raise RuntimeError(f"HKV insert_or_assign failed: {e}")
     
     def zero_grad(self):
-        """清空梯度（类似optimizer.zero_grad()）"""
-        self.gradient_accumulator.clear()
-        self.gradient_count.clear()
+        """Clear gradients (like optimizer.zero_grad())."""
+        self.grad_buffer.clear()
+    
+    def get_pending_gradient_count(self) -> int:
+        """Get number of keys with pending gradients."""
+        return self.grad_buffer.size()
+    
+    def get_embedding(self, key: int) -> Optional[torch.Tensor]:
+        """Get embedding for a single key."""
+        try:
+            keys_np = np.array([key], dtype=np.uint64)
+            embeddings_np, found = self.hashtable.find(keys_np)
+            if found[0]:
+                return torch.from_numpy(embeddings_np.reshape(self.embedding_dim))
+            return None
+        except:
+            return None
+    
+    def get_embeddings(self, keys: Union[List[int], np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Get embeddings for multiple keys."""
+        if isinstance(keys, torch.Tensor):
+            keys_np = keys.cpu().numpy().astype(np.uint64)
+        elif isinstance(keys, list):
+            keys_np = np.array(keys, dtype=np.uint64)
+        else:
+            keys_np = keys.astype(np.uint64)
+        
+        embeddings_np, _ = self.hashtable.find(keys_np)
+        return torch.from_numpy(embeddings_np.reshape(-1, self.embedding_dim)).to(
+            device=self.device, dtype=self.dtype
+        )
     
     def parameters(self):
-        """返回可训练参数（为了兼容PyTorch优化器）"""
-        # 返回一个虚拟参数，实际参数管理由内部处理
+        """Return trainable parameters (for PyTorch optimizer compatibility)."""
         return [self._dummy_param]
     
     def named_parameters(self):
-        """返回命名参数"""
+        """Return named parameters."""
         yield 'hkv_embeddings', self._dummy_param
     
     def state_dict(self):
-        """保存状态字典"""
-        # 这里可以实现保存HKV哈希表的逻辑
+        """Save state dict."""
         return {
             'embedding_dim': self.embedding_dim,
             'max_capacity': self.max_capacity,
@@ -327,7 +513,7 @@ class HierarchicalHashEmbedding(nn.Module):
         }
     
     def load_state_dict(self, state_dict):
-        """加载状态字典"""
+        """Load state dict."""
         self.embedding_dim = state_dict.get('embedding_dim', self.embedding_dim)
         self.max_capacity = state_dict.get('max_capacity', self.max_capacity)
         self.init_capacity = state_dict.get('init_capacity', self.init_capacity)
@@ -337,8 +523,25 @@ class HierarchicalHashEmbedding(nn.Module):
         self.miss_count = state_dict.get('miss_count', 0)
         self.total_queries = state_dict.get('total_queries', 0)
     
+    def export_embeddings(self, batch_size: int = 10000) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Export all embeddings from the hash table.
+        
+        Args:
+            batch_size: Batch size for export
+            
+        Returns:
+            Tuple of (keys, embeddings)
+        """
+        # Note: This requires implementing export in C++ layer
+        # For now, raise NotImplementedError
+        raise NotImplementedError(
+            "Export functionality requires C++ implementation. "
+            "Use hashtable's export_batch if available."
+        )
+    
     def get_statistics(self) -> Dict:
-        """获取统计信息"""
+        """Get statistics."""
         try:
             current_size = self.hashtable.size()
             current_capacity = self.hashtable.capacity()
@@ -360,7 +563,7 @@ class HierarchicalHashEmbedding(nn.Module):
             'hit_rate': hit_rate,
             'load_factor': load_factor,
             'embedding_dim': self.embedding_dim,
-            'pending_gradients': len(self.gradient_accumulator),
+            'pending_gradients': self.get_pending_gradient_count(),
             'learning_rate': self.learning_rate,
             'weight_decay': self.weight_decay,
         }
@@ -374,3 +577,79 @@ class HierarchicalHashEmbedding(nn.Module):
                 f"hit_rate={stats['hit_rate']:.2%}, "
                 f"lr={self.learning_rate}, "
                 f"pending_grads={stats['pending_gradients']})")
+
+
+class MultiTableHKVEmbedding(nn.Module):
+    """
+    Multiple HKV embedding tables for different feature fields.
+    Common in recommendation systems with multiple categorical features.
+    """
+    
+    def __init__(self,
+                 num_tables: int,
+                 embedding_dim: int,
+                 max_capacity_per_table: int = 1000000,
+                 init_capacity_per_table: int = 100000,
+                 max_hbm_gb_per_table: int = 4,
+                 device: str = 'cuda',
+                 dtype: torch.dtype = torch.float32,
+                 shared_optimizer: bool = True):
+        """
+        Initialize multiple embedding tables.
+        
+        Args:
+            num_tables: Number of embedding tables
+            embedding_dim: Embedding dimension (same for all tables)
+            max_capacity_per_table: Maximum capacity per table
+            init_capacity_per_table: Initial capacity per table
+            max_hbm_gb_per_table: HBM per table
+            device: Device
+            dtype: Data type
+            shared_optimizer: Whether to use shared optimizer settings
+        """
+        super().__init__()
+        
+        self.num_tables = num_tables
+        self.embedding_dim = embedding_dim
+        
+        # Create embedding tables
+        self.tables = nn.ModuleList([
+            HierarchicalHashEmbedding(
+                embedding_dim=embedding_dim,
+                max_capacity=max_capacity_per_table,
+                init_capacity=init_capacity_per_table,
+                max_hbm_gb=max_hbm_gb_per_table,
+                device=device,
+                dtype=dtype
+            )
+            for _ in range(num_tables)
+        ])
+    
+    def forward(self, indices_list: List[torch.Tensor]) -> List[torch.Tensor]:
+        """
+        Forward pass for all tables.
+        
+        Args:
+            indices_list: List of index tensors, one per table
+            
+        Returns:
+            List of embedding tensors
+        """
+        assert len(indices_list) == self.num_tables, \
+            f"Expected {self.num_tables} index tensors, got {len(indices_list)}"
+        
+        return [table(indices) for table, indices in zip(self.tables, indices_list)]
+    
+    def zero_grad(self):
+        """Clear all gradients."""
+        for table in self.tables:
+            table.zero_grad()
+    
+    def step(self):
+        """Update all tables."""
+        for table in self.tables:
+            table.step()
+    
+    def get_all_tables(self) -> List[HierarchicalHashEmbedding]:
+        """Get all embedding tables."""
+        return list(self.tables)

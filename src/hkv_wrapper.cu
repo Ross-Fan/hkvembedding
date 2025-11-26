@@ -12,12 +12,15 @@ HashTableWrapper<K, V, S>::HashTableWrapper(
     : embedding_dim_(embedding_dim), initialized_(false) {
     
     try {
-        // 检查CUDA设备
+        // Check CUDA device
         int device_count;
         cudaError_t cuda_status = cudaGetDeviceCount(&device_count);
         if (cuda_status != cudaSuccess || device_count == 0) {
             throw std::runtime_error("No CUDA devices found");
         }
+        
+        // Initialize stream pool for reusing CUDA streams
+        stream_pool_ = std::make_unique<CudaStreamPool>(4);
         
         table_ = std::make_unique<HKVTable>();
         
@@ -48,37 +51,37 @@ HashTableWrapper<K, V, S>::find_or_insert(const std::vector<K>& keys) {
     std::vector<V> embeddings(batch_size * embedding_dim_);
     
     try {
-        // 创建CUDA流
-        cudaStream_t stream;
-        cudaStreamCreate(&stream);
+        // Get stream from pool (reuse streams)
+        cudaStream_t stream = stream_pool_->get();
         
-        // 分配GPU内存
+        // Allocate GPU memory
         K* d_keys;
         V* d_vectors;
-        S* d_scores = nullptr;  // 不使用scores
+        S* d_scores = nullptr;
         
         cudaMalloc(&d_keys, batch_size * sizeof(K));
         cudaMalloc(&d_vectors, batch_size * embedding_dim_ * sizeof(V));
         
-        // 复制keys到GPU
-        cudaMemcpy(d_keys, keys.data(), batch_size * sizeof(K), cudaMemcpyHostToDevice);
+        // Copy keys to GPU
+        cudaMemcpyAsync(d_keys, keys.data(), batch_size * sizeof(K), 
+                       cudaMemcpyHostToDevice, stream);
         
-        // 调用HKV的find_or_insert - 注意：不需要found参数！
+        // Call HKV's find_or_insert
         table_->find_or_insert(batch_size, d_keys, d_vectors, d_scores, stream);
         
-        // 同步流
+        // Copy results back to CPU
+        cudaMemcpyAsync(embeddings.data(), d_vectors, 
+                       batch_size * embedding_dim_ * sizeof(V), 
+                       cudaMemcpyDeviceToHost, stream);
+        
+        // Synchronize
         cudaStreamSynchronize(stream);
         
-        // 复制结果回CPU
-        cudaMemcpy(embeddings.data(), d_vectors, 
-                   batch_size * embedding_dim_ * sizeof(V), cudaMemcpyDeviceToHost);
-        
-        // 清理GPU内存
+        // Cleanup GPU memory
         cudaFree(d_keys);
         cudaFree(d_vectors);
-        cudaStreamDestroy(stream);
         
-        // find_or_insert总是成功的，所以所有的found_flags都是true
+        // find_or_insert always succeeds
         std::vector<bool> found_flags(batch_size, true);
         
         return {embeddings, found_flags};
@@ -102,33 +105,28 @@ void HashTableWrapper<K, V, S>::insert_or_assign(
     }
     
     try {
-        // 创建CUDA流
-        cudaStream_t stream;
-        cudaStreamCreate(&stream);
+        cudaStream_t stream = stream_pool_->get();
         
-        // 分配GPU内存
         K* d_keys;
         V* d_vectors;
-        S* d_scores = nullptr;  // 不使用scores
+        S* d_scores = nullptr;
         
         cudaMalloc(&d_keys, batch_size * sizeof(K));
         cudaMalloc(&d_vectors, batch_size * embedding_dim_ * sizeof(V));
         
-        // 复制数据到GPU
-        cudaMemcpy(d_keys, keys.data(), batch_size * sizeof(K), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_vectors, values.data(), 
-                   batch_size * embedding_dim_ * sizeof(V), cudaMemcpyHostToDevice);
+        // Async copies
+        cudaMemcpyAsync(d_keys, keys.data(), batch_size * sizeof(K), 
+                       cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_vectors, values.data(), 
+                       batch_size * embedding_dim_ * sizeof(V), 
+                       cudaMemcpyHostToDevice, stream);
         
-        // 调用HKV的insert_or_assign
         table_->insert_or_assign(batch_size, d_keys, d_vectors, d_scores, stream);
         
-        // 同步流
         cudaStreamSynchronize(stream);
         
-        // 清理GPU内存
         cudaFree(d_keys);
         cudaFree(d_vectors);
-        cudaStreamDestroy(stream);
         
     } catch (const std::exception& e) {
         throw std::runtime_error("insert_or_assign failed: " + std::string(e.what()));
@@ -149,11 +147,8 @@ HashTableWrapper<K, V, S>::find(const std::vector<K>& keys) {
     std::vector<bool> found_flags(batch_size);
     
     try {
-        // 创建CUDA流
-        cudaStream_t stream;
-        cudaStreamCreate(&stream);
+        cudaStream_t stream = stream_pool_->get();
         
-        // 分配GPU内存
         K* d_keys;
         V* d_vectors;
         bool* d_found;
@@ -163,34 +158,31 @@ HashTableWrapper<K, V, S>::find(const std::vector<K>& keys) {
         cudaMalloc(&d_vectors, batch_size * embedding_dim_ * sizeof(V));
         cudaMalloc(&d_found, batch_size * sizeof(bool));
         
-        // 复制keys到GPU
-        cudaMemcpy(d_keys, keys.data(), batch_size * sizeof(K), cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(d_keys, keys.data(), batch_size * sizeof(K), 
+                       cudaMemcpyHostToDevice, stream);
         
-        // 调用HKV的find
         table_->find(batch_size, d_keys, d_vectors, d_found, d_scores, stream);
         
-        // 同步流
+        cudaMemcpyAsync(embeddings.data(), d_vectors, 
+                       batch_size * embedding_dim_ * sizeof(V), 
+                       cudaMemcpyDeviceToHost, stream);
+        
+        // Handle bool array
+        std::vector<char> temp_found(batch_size);
+        cudaMemcpyAsync(temp_found.data(), d_found, 
+                       batch_size * sizeof(bool), 
+                       cudaMemcpyDeviceToHost, stream);
+        
         cudaStreamSynchronize(stream);
         
-        // 复制embeddings结果回CPU
-        cudaMemcpy(embeddings.data(), d_vectors, 
-                   batch_size * embedding_dim_ * sizeof(V), cudaMemcpyDeviceToHost);
-        
-        // 处理bool数组 - 使用临时缓冲区避免std::vector<bool>的问题
-        std::vector<char> temp_found(batch_size);
-        cudaMemcpy(temp_found.data(), d_found, 
-                   batch_size * sizeof(bool), cudaMemcpyDeviceToHost);
-        
-        // 转换到std::vector<bool>
+        // Convert to std::vector<bool>
         for (size_t i = 0; i < batch_size; ++i) {
             found_flags[i] = static_cast<bool>(temp_found[i]);
         }
         
-        // 清理GPU内存
         cudaFree(d_keys);
         cudaFree(d_vectors);
         cudaFree(d_found);
-        cudaStreamDestroy(stream);
         
         return {embeddings, found_flags};
         
@@ -208,11 +200,8 @@ void HashTableWrapper<K, V, S>::batch_insert_or_assign(
     if (batch_size == 0) return;
     
     try {
-        // 创建CUDA流
-        cudaStream_t stream;
-        cudaStreamCreate(&stream);
+        cudaStream_t stream = stream_pool_->get();
         
-        // 分配GPU内存
         K* d_keys;
         V* d_vectors;
         S* d_scores = nullptr;
@@ -220,21 +209,18 @@ void HashTableWrapper<K, V, S>::batch_insert_or_assign(
         cudaMalloc(&d_keys, batch_size * sizeof(K));
         cudaMalloc(&d_vectors, batch_size * embedding_dim_ * sizeof(V));
         
-        // 复制数据到GPU
-        cudaMemcpy(d_keys, keys, batch_size * sizeof(K), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_vectors, values, 
-                   batch_size * embedding_dim_ * sizeof(V), cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(d_keys, keys, batch_size * sizeof(K), 
+                       cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_vectors, values, 
+                       batch_size * embedding_dim_ * sizeof(V), 
+                       cudaMemcpyHostToDevice, stream);
         
-        // 调用HKV的insert_or_assign
         table_->insert_or_assign(batch_size, d_keys, d_vectors, d_scores, stream);
         
-        // 同步流
         cudaStreamSynchronize(stream);
         
-        // 清理GPU内存
         cudaFree(d_keys);
         cudaFree(d_vectors);
-        cudaStreamDestroy(stream);
         
     } catch (const std::exception& e) {
         throw std::runtime_error("batch_insert_or_assign failed: " + std::string(e.what()));
@@ -253,11 +239,8 @@ HashTableWrapper<K, V, S>::batch_find_or_insert(const K* keys, size_t batch_size
     std::vector<V> embeddings(batch_size * embedding_dim_);
     
     try {
-        // 创建CUDA流
-        cudaStream_t stream;
-        cudaStreamCreate(&stream);
+        cudaStream_t stream = stream_pool_->get();
         
-        // 分配GPU内存
         K* d_keys;
         V* d_vectors;
         S* d_scores = nullptr;
@@ -265,31 +248,142 @@ HashTableWrapper<K, V, S>::batch_find_or_insert(const K* keys, size_t batch_size
         cudaMalloc(&d_keys, batch_size * sizeof(K));
         cudaMalloc(&d_vectors, batch_size * embedding_dim_ * sizeof(V));
         
-        // 复制keys到GPU
-        cudaMemcpy(d_keys, keys, batch_size * sizeof(K), cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(d_keys, keys, batch_size * sizeof(K), 
+                       cudaMemcpyHostToDevice, stream);
         
-        // 调用HKV的find_or_insert
         table_->find_or_insert(batch_size, d_keys, d_vectors, d_scores, stream);
         
-        // 同步流
+        cudaMemcpyAsync(embeddings.data(), d_vectors, 
+                       batch_size * embedding_dim_ * sizeof(V), 
+                       cudaMemcpyDeviceToHost, stream);
+        
         cudaStreamSynchronize(stream);
         
-        // 复制结果回CPU
-        cudaMemcpy(embeddings.data(), d_vectors, 
-                   batch_size * embedding_dim_ * sizeof(V), cudaMemcpyDeviceToHost);
-        
-        // 清理GPU内存
         cudaFree(d_keys);
         cudaFree(d_vectors);
-        cudaStreamDestroy(stream);
         
-        // find_or_insert总是成功的
         std::vector<bool> found_flags(batch_size, true);
         
         return {embeddings, found_flags};
         
     } catch (const std::exception& e) {
         throw std::runtime_error("batch_find_or_insert failed: " + std::string(e.what()));
+    }
+}
+
+template<typename K, typename V, typename S>
+void HashTableWrapper<K, V, S>::apply_gradients(
+    const std::vector<K>& keys, 
+    const std::vector<V>& gradients,
+    float learning_rate) {
+    
+    ensure_initialized();
+    
+    size_t batch_size = keys.size();
+    if (batch_size == 0) return;
+    
+    if (gradients.size() != batch_size * embedding_dim_) {
+        throw std::invalid_argument("Gradients size mismatch");
+    }
+    
+    try {
+        cudaStream_t stream = stream_pool_->get();
+        
+        // First, find current embeddings
+        K* d_keys;
+        V* d_vectors;
+        V* d_grads;
+        S* d_scores = nullptr;
+        
+        cudaMalloc(&d_keys, batch_size * sizeof(K));
+        cudaMalloc(&d_vectors, batch_size * embedding_dim_ * sizeof(V));
+        cudaMalloc(&d_grads, batch_size * embedding_dim_ * sizeof(V));
+        
+        cudaMemcpyAsync(d_keys, keys.data(), batch_size * sizeof(K), 
+                       cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_grads, gradients.data(), 
+                       batch_size * embedding_dim_ * sizeof(V), 
+                       cudaMemcpyHostToDevice, stream);
+        
+        // Get current embeddings
+        table_->find_or_insert(batch_size, d_keys, d_vectors, d_scores, stream);
+        
+        // Apply gradient update on GPU (could use a custom kernel, but using CPU for simplicity)
+        cudaStreamSynchronize(stream);
+        
+        std::vector<V> current_embeddings(batch_size * embedding_dim_);
+        cudaMemcpy(current_embeddings.data(), d_vectors, 
+                  batch_size * embedding_dim_ * sizeof(V), cudaMemcpyDeviceToHost);
+        
+        // Update: embedding = embedding - lr * gradient
+        for (size_t i = 0; i < current_embeddings.size(); ++i) {
+            current_embeddings[i] -= learning_rate * gradients[i];
+        }
+        
+        // Write back
+        cudaMemcpyAsync(d_vectors, current_embeddings.data(), 
+                       batch_size * embedding_dim_ * sizeof(V), 
+                       cudaMemcpyHostToDevice, stream);
+        
+        table_->insert_or_assign(batch_size, d_keys, d_vectors, d_scores, stream);
+        
+        cudaStreamSynchronize(stream);
+        
+        cudaFree(d_keys);
+        cudaFree(d_vectors);
+        cudaFree(d_grads);
+        
+    } catch (const std::exception& e) {
+        throw std::runtime_error("apply_gradients failed: " + std::string(e.what()));
+    }
+}
+
+template<typename K, typename V, typename S>
+std::pair<std::vector<K>, std::vector<V>> 
+HashTableWrapper<K, V, S>::export_all(size_t max_count) {
+    ensure_initialized();
+    
+    cudaStream_t stream = stream_pool_->get();
+    
+    size_t table_size = table_->size(stream);
+    cudaStreamSynchronize(stream);
+    
+    if (table_size == 0) {
+        return {std::vector<K>(), std::vector<V>()};
+    }
+    
+    size_t export_count = (max_count > 0 && max_count < table_size) ? max_count : table_size;
+    
+    std::vector<K> keys(export_count);
+    std::vector<V> values(export_count * embedding_dim_);
+    
+    try {
+        K* d_keys;
+        V* d_vectors;
+        S* d_scores = nullptr;
+        
+        cudaMalloc(&d_keys, export_count * sizeof(K));
+        cudaMalloc(&d_vectors, export_count * embedding_dim_ * sizeof(V));
+        
+        // Export using HKV's export_batch
+        size_t exported = 0;
+        table_->export_batch(table_->capacity(), 0, d_keys, d_vectors, d_scores, stream);
+        
+        cudaMemcpyAsync(keys.data(), d_keys, export_count * sizeof(K), 
+                       cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(values.data(), d_vectors, 
+                       export_count * embedding_dim_ * sizeof(V), 
+                       cudaMemcpyDeviceToHost, stream);
+        
+        cudaStreamSynchronize(stream);
+        
+        cudaFree(d_keys);
+        cudaFree(d_vectors);
+        
+        return {keys, values};
+        
+    } catch (const std::exception& e) {
+        throw std::runtime_error("export_all failed: " + std::string(e.what()));
     }
 }
 
@@ -329,29 +423,22 @@ template<typename K, typename V, typename S>
 void HashTableWrapper<K, V, S>::reserve(size_t capacity) {
     ensure_initialized();
     
-    cudaStream_t stream;
-    cudaStreamCreate(&stream);
+    cudaStream_t stream = stream_pool_->get();
     table_->reserve(capacity, stream);
     cudaStreamSynchronize(stream);
-    cudaStreamDestroy(stream);
 }
 
 template<typename K, typename V, typename S>
 void HashTableWrapper<K, V, S>::clear() {
     ensure_initialized();
     
-    cudaStream_t stream;
-    cudaStreamCreate(&stream);
+    cudaStream_t stream = stream_pool_->get();
     table_->clear(stream);
     cudaStreamSynchronize(stream);
-    cudaStreamDestroy(stream);
 }
 
-// 显式实例化 - 只保留HKV支持的类型组合
-// Key必须是int64_t或uint64_t，Score必须是uint64_t
+// Explicit template instantiation
 template class HashTableWrapper<uint64_t, float, uint64_t>;
 template class HashTableWrapper<int64_t, float, uint64_t>;
-// 移除不支持的uint32_t组合
-// template class HashTableWrapper<uint32_t, float, uint32_t>;  // 这行导致错误
 
 } // namespace hkv_wrapper
