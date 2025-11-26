@@ -1,5 +1,5 @@
 import torch
-import hkv_python_binding as hkv
+import hkv_embedding as hkv
 
 # Create embedding layer
 embedding = hkv.HierarchicalHashEmbedding(
