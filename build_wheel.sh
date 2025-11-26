@@ -48,23 +48,30 @@ print('Python版本:', sys.version)
 
 try:
     # 测试核心模块
-    import hkv_core
-    print('✅ hkv_core导入成功')
-    print('版本:', hkv_core.version())
+    import hkv_embedding
+    print('✅ hkv_embedding导入成功')
     
-    # 测试Python包装
-    import hkv_python_binding
-    print('✅ hkv_python_binding导入成功')
+    # 测试版本信息
+    version_info = hkv_embedding.get_version_info()
+    print('版本信息:', version_info)
     
     # 测试创建HashTable
-    table = hkv_python_binding.HashTable(1024, 2048, 64, 1)
+    table = hkv_embedding.HashTable(1024, 2048, 64, 1)
     print('✅ HashTable创建成功')
     print('容量:', table.capacity())
     
+    # 测试便捷函数
+    table2 = hkv_embedding.create_hashtable(1024, 2048, 64, 1)
+    print('✅ create_hashtable成功')
+    
     # 测试PyTorch封装
-    embedding = hkv_python_binding.HierarchicalHashEmbedding(64, 2048, 1024, 1)
+    embedding = hkv_embedding.HierarchicalHashEmbedding(64, 2048, 1024, 1)
     print('✅ HierarchicalHashEmbedding创建成功')
     print(embedding)
+    
+    # 测试便捷创建函数
+    embedding2 = hkv_embedding.create_embedding(64, 2048, 1024, 1)
+    print('✅ create_embedding成功')
     
 except Exception as e:
     print('❌ 测试失败:', str(e))

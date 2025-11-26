@@ -76,7 +76,7 @@ def read_readme():
 # 修正：使用正确的CUDA编译选项
 ext_modules = [
     Pybind11Extension(
-        "hkv_core",
+        "hkv_embedding.hkv_core",
         [
             "src/hkv_wrapper.cu",
             "src/python_bindings.cu",
@@ -97,9 +97,9 @@ ext_modules = [
 ]
 
 setup(
-    name="hkv-python-binding",
+    name="hkv-embedding",
     version="1.0.0",
-    author="HKV Team",
+    author="Wei Fan",
     author_email="your.email@example.com",
     description="Python bindings for HierarchicalKV - High-performance GPU hashtable for embeddings",
     long_description=read_readme(),
@@ -112,11 +112,18 @@ setup(
     zip_safe=False,
     python_requires=">=3.8",
     install_requires=[
-        "torch>=1.9.0",
+        # "torch>=1.9.0",
         "numpy>=1.19.0",
         "pybind11>=2.6.0",
     ],
     extras_require={
+        "pytorch": [
+            "torch>=1.9.0,<3.0.0",  # 放宽版本范围
+        ],
+        "pytorch-cu121": [
+            "torch>=2.0.0,<3.0.0",
+            
+        ],
         "dev": [
             "pytest>=6.0",
             "pytest-cov",

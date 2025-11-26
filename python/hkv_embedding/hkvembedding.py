@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Union
-import hkv_core
+from . import hkv_core
 
 class HierarchicalHashEmbedding(nn.Module):
     """
