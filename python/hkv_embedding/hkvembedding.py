@@ -177,16 +177,21 @@ class HKVEmbeddingFunction(torch.autograd.Function):
     """
     HKV Embedding custom autograd function.
     Supports forward and backward propagation with GPU-backed gradient accumulation.
+    
+    Note: This function uses a dummy tensor to enable gradient flow through
+    the autograd graph, while actual gradient accumulation happens in the
+    backward pass via the embedding layer's gradient buffer.
     """
     
     @staticmethod
-    def forward(ctx, indices, embedding_layer):
+    def forward(ctx, dummy_input, indices, embedding_layer):
         """
         Forward pass.
         
         Args:
             ctx: autograd context
-            indices: input index tensor
+            dummy_input: A dummy tensor with requires_grad=True to enable gradient flow
+            indices: input index tensor (integer IDs)
             embedding_layer: HierarchicalHashEmbedding instance
         
         Returns:
@@ -196,8 +201,9 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         ctx.embedding_layer = embedding_layer
         ctx.save_for_backward(indices)
 
-        # 通过层实现计算嵌入，不强制设置requires_grad
-        embeddings = embedding_layer._forward_impl(indices)
+        # 获取嵌入向量
+        with torch.no_grad():
+            embeddings = embedding_layer._forward_impl(indices)
         
         return embeddings
     
@@ -213,8 +219,9 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         if grad_output is not None:
             embedding_layer._accumulate_gradients(indices, grad_output)
         
-        # 返回None表示输入indices不需要梯度，embedding_layer是模块本身也不需要梯度
-        return None, None
+        # 返回梯度：dummy_input需要返回一个梯度（虽然不会被使用），
+        # indices不需要梯度，embedding_layer也不需要
+        return grad_output.new_zeros(1), None, None
 
 
 class HierarchicalHashEmbedding(nn.Module):
@@ -283,8 +290,9 @@ class HierarchicalHashEmbedding(nn.Module):
         # Track keys seen in current forward pass (for initialization)
         self._current_batch_new_keys = None
         
-        # Register dummy parameter for PyTorch compatibility
-        self.register_buffer('_dummy_param', torch.zeros(1, requires_grad=False))
+        # Register dummy parameter for gradient flow in autograd.Function
+        # This tensor enables the backward pass to be triggered
+        self._grad_dummy = nn.Parameter(torch.zeros(1), requires_grad=True)
     
     def forward(self, indices):
         """
@@ -302,15 +310,8 @@ class HierarchicalHashEmbedding(nn.Module):
         original_shape = indices.shape
         indices_flat = indices.flatten()
         
-        # 使用自定义autograd函数
-        embeddings = HKVEmbeddingFunction.apply(indices_flat, self)
-
-        # 注册梯度钩子以捕获梯度
-        def _gradient_hook(grad):
-            if grad is not None:
-                self._accumulate_gradients(indices_flat, grad)
-        
-        embeddings.register_hook(_gradient_hook)
+        # 使用自定义autograd函数，传入dummy参数以启用梯度流
+        embeddings = HKVEmbeddingFunction.apply(self._grad_dummy, indices_flat, self)
             
         # 恢复原始形状
         if len(original_shape) == 1:
@@ -503,11 +504,11 @@ class HierarchicalHashEmbedding(nn.Module):
     
     def parameters(self):
         """Return trainable parameters (for PyTorch optimizer compatibility)."""
-        return [self._dummy_param]
+        return [self._grad_dummy]
     
-    def named_parameters(self):
+    def named_parameters(self, prefix='', recurse=True):
         """Return named parameters."""
-        yield 'hkv_embeddings', self._dummy_param
+        yield prefix + ('.' if prefix else '') + '_grad_dummy', self._grad_dummy
     
     def state_dict(self):
         """Save state dict."""
