@@ -1,0 +1,22 @@
+$ python3 examples/training_example.py 
+============================================================
+Testing HKV Embedding Gradient Flow
+============================================================
+Initial stats: {'current_size': 0, 'max_capacity': 10000, 'current_capacity': 1024, 'hit_count': 0, 'miss_count': 0, 'total_queries': 0, 'hit_rate': 0, 'load_factor': 0.0, 'embedding_dim': 16, 'pending_gradients': 0, 'learning_rate': 0.1, 'weight_decay': 0.0}
+Traceback (most recent call last):
+  File "/home/work/data/wtorchs/hkv-python-binding/examples/training_example.py", line 467, in <module>
+    test_gradient_flow()
+  File "/home/work/data/wtorchs/hkv-python-binding/examples/training_example.py", line 389, in test_gradient_flow
+    embeddings = embedding(indices)
+                 ^^^^^^^^^^^^^^^^^^
+  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/hkv_embedding/hkvembedding.py", line 313, in forward
+    embeddings.register_hook(_gradient_hook)
+  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/_tensor.py", line 621, in register_hook
+    raise RuntimeError(
+RuntimeError: cannot register a hook on a tensor that doesn't require gradient

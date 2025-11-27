@@ -192,11 +192,12 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         Returns:
             embeddings: embedding tensor
         """
+        # 保存引用用于反向传播
         ctx.embedding_layer = embedding_layer
         ctx.save_for_backward(indices)
-        
-        with torch.no_grad():
-            embeddings = embedding_layer._forward_impl(indices)
+
+        # 通过层实现计算嵌入，不强制设置requires_grad
+        embeddings = embedding_layer._forward_impl(indices)
         
         return embeddings
     
@@ -208,9 +209,11 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         indices, = ctx.saved_tensors
         embedding_layer = ctx.embedding_layer
         
-        # Accumulate gradients to GPU buffer
-        embedding_layer._accumulate_gradients(indices, grad_output)
+        # 累积梯度到GPU缓冲区
+        if grad_output is not None:
+            embedding_layer._accumulate_gradients(indices, grad_output)
         
+        # 返回None表示输入indices不需要梯度，embedding_layer是模块本身也不需要梯度
         return None, None
 
 
@@ -295,19 +298,26 @@ class HierarchicalHashEmbedding(nn.Module):
         """
         if indices.numel() == 0:
             return torch.empty(0, self.embedding_dim, dtype=self.dtype, device=self.device)
-        
+
         original_shape = indices.shape
         indices_flat = indices.flatten()
         
-        # Use custom autograd function
+        # 使用自定义autograd函数
         embeddings = HKVEmbeddingFunction.apply(indices_flat, self)
+
+        # 注册梯度钩子以捕获梯度
+        def _gradient_hook(grad):
+            if grad is not None:
+                self._accumulate_gradients(indices_flat, grad)
         
-        # Restore original shape
+        embeddings.register_hook(_gradient_hook)
+            
+        # 恢复原始形状
         if len(original_shape) == 1:
             return embeddings
         else:
             return embeddings.view(*original_shape, self.embedding_dim)
-    
+        
     def _forward_impl(self, indices):
         """
         Actual forward implementation.

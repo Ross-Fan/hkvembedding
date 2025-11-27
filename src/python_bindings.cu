@@ -97,12 +97,16 @@ void bind_hashtable(py::module& m, const char* name) {
              [](Wrapper& self, size_t max_count) {
                  auto [keys, values] = self.export_all(max_count);
                  
-                 if (keys.empty()) {
-                     return py::make_tuple(
-                         py::array_t<K>(0),
-                         py::array_t<float>({0, static_cast<ssize_t>(self.embedding_dim())})
-                     );
-                 }
+                if (keys.empty()) {
+                    // Construct shapes explicitly to avoid brace-init ambiguity
+                    auto keys_arr = py::array_t<K>(0);
+                    std::vector<ssize_t> values_shape = {
+                        static_cast<ssize_t>(0),
+                        static_cast<ssize_t>(self.embedding_dim())
+                    };
+                    auto values_arr = py::array_t<float>(values_shape);
+                    return py::make_tuple(keys_arr, values_arr);
+                }
                  
                  auto keys_shape = std::vector<ssize_t>{static_cast<ssize_t>(keys.size())};
                  auto values_shape = std::vector<ssize_t>{
