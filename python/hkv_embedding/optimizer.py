@@ -75,7 +75,8 @@ class HKVAdamOptimizer:
                  betas: tuple = (0.9, 0.999), 
                  eps: float = 1e-8, 
                  weight_decay: float = 0.0,
-                 state_hbm_gb_per_embedding: int = 2):
+                 state_hbm_gb_per_embedding: int = 2,
+                 max_grad_norm: float = 10.0):
         """
         Initialize Adam optimizer with GPU-backed state storage.
         
@@ -108,6 +109,8 @@ class HKVAdamOptimizer:
                 max_capacity=embedding.max_capacity,
                 max_hbm_gb=state_hbm_gb_per_embedding
             )
+        # Gradient clipping threshold (L2 norm per-key)
+        self.max_grad_norm = max_grad_norm
     
     def step(self):
         """Execute Adam optimization step using GPU-backed state."""
@@ -158,6 +161,12 @@ class HKVAdamOptimizer:
             # Store updated states
             state_buffer.update_states(valid_keys, m_new, v_new)
             
+            # Optional per-key gradient clipping to avoid exploding updates
+            if self.max_grad_norm is not None and self.max_grad_norm > 0:
+                norms = np.linalg.norm(valid_grads, axis=1, keepdims=True)
+                scale = np.minimum(1.0, self.max_grad_norm / (norms + 1e-6))
+                valid_grads = valid_grads * scale
+
             # Compute bias-corrected estimates
             m_hat = m_new / (1 - beta1 ** self.step_count)
             v_hat = v_new / (1 - beta2 ** self.step_count)

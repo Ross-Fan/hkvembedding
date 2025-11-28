@@ -219,10 +219,15 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         ctx.embedding_layer = embedding_layer
         ctx.save_for_backward(indices)
 
-        # 获取嵌入向量
+        # 获取嵌入向量（不在autograd下执行HKV查找）
         with torch.no_grad():
             embeddings = embedding_layer._forward_impl(indices)
-        
+
+        # Tie the returned tensor to the dummy_input so that autograd will
+        # invoke this Function.backward. Adding a zero-valued scalar that
+        # depends on dummy_input creates a dependency without changing values.
+        embeddings = embeddings + (dummy_input.sum() * 0.0)
+
         return embeddings
     
     @staticmethod
@@ -265,7 +270,8 @@ class HierarchicalHashEmbedding(nn.Module):
                  init_std: float = None,
                  learning_rate: float = 0.01,
                  weight_decay: float = 0.0,
-                 grad_buffer_hbm_gb: int = 1):
+                 grad_buffer_hbm_gb: int = 1,
+                 debug_print: bool = False):
         """
         Initialize HierarchicalHashEmbedding.
         
@@ -288,10 +294,11 @@ class HierarchicalHashEmbedding(nn.Module):
         self.init_capacity = init_capacity
         self.device = device
         self.dtype = dtype
-        self.init_std = init_std or np.sqrt(2.0 / embedding_dim)
+        self.init_std = init_std or 0.1 * (2.0 / embedding_dim)
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
-        
+        self._debug_print = debug_print  # 设置调试打印标志
+
         # Create HKV hash table for embeddings
         try:
             self.hashtable = hkv_core.HashTable(
@@ -418,6 +425,25 @@ class HierarchicalHashEmbedding(nn.Module):
             indices = indices.to(self.device)
         if grad_output.device != self.device:
             grad_output = grad_output.to(self.device)
+
+        # 打印梯度信息用于调试
+        if hasattr(self, '_debug_print') and self._debug_print:
+            print(f"Indices shape: {indices.shape}, Grad output shape: {grad_output.shape}")
+            print(f"Grad output stats - Min: {grad_output.min().item():.6f}, "
+                f"Max: {grad_output.max().item():.6f}, "
+                f"Mean: {grad_output.mean().item():.6f}, "
+                f"Std: {grad_output.std().item():.6f}")
+            
+            # 打印前几个梯度值的样本
+            if grad_output.numel() > 0:
+                sample_grads = grad_output.flatten()[:10]
+                print(f"Sample gradients: {sample_grads.tolist()}")
+            
+            # 检查是否有异常值
+            if torch.isnan(grad_output).any():
+                print("WARNING: NaN detected in gradients!")
+            if torch.isinf(grad_output).any():
+                print("WARNING: Inf detected in gradients!")
 
         # Convert to numpy for HKV
         indices_np = indices.cpu().numpy().astype(np.uint64)
@@ -637,9 +663,11 @@ class MultiTableHKVEmbedding(nn.Module):
                  max_capacity_per_table: int = 1000000,
                  init_capacity_per_table: int = 100000,
                  max_hbm_gb_per_table: int = 4,
+                 learning_rate: float = 0.001,
                  device: str = 'cuda',
                  dtype: torch.dtype = torch.float32,
-                 shared_optimizer: bool = True):
+                 shared_optimizer: bool = True,
+                 debug_print: bool = False):
         """
         Initialize multiple embedding tables.
         
@@ -657,6 +685,7 @@ class MultiTableHKVEmbedding(nn.Module):
         
         self.num_tables = num_tables
         self.embedding_dim = embedding_dim
+        self.debug_print = debug_print
         
         # Create embedding tables
         self.tables = nn.ModuleList([
@@ -665,8 +694,10 @@ class MultiTableHKVEmbedding(nn.Module):
                 max_capacity=max_capacity_per_table,
                 init_capacity=init_capacity_per_table,
                 max_hbm_gb=max_hbm_gb_per_table,
+                learning_rate=learning_rate,
                 device=device,
-                dtype=dtype
+                dtype=dtype,
+                debug_print=self.debug_print
             )
             for _ in range(num_tables)
         ])

@@ -41,7 +41,8 @@ class DeepFMModel(nn.Module):
             init_capacity_per_table=max_capacity_per_field // 100,
             max_hbm_gb_per_table=max_hbm_gb_per_field,
             device='cuda',
-            shared_optimizer=True
+            shared_optimizer=True,
+            debug_print=True
         )
         
         # FM interaction layer (no learnable parameters, just computation)
@@ -71,7 +72,7 @@ class DeepFMModel(nn.Module):
         """
         # Get embeddings for all sparse fields
         embeddings_list = self.sparse_embeddings(sparse_indices_list)
-        
+        # print(embeddings_list[:10])
         # Stack embeddings: [batch, num_fields, dim]
         stacked = torch.stack(embeddings_list, dim=1)
         batch_size = stacked.size(0)
@@ -188,7 +189,7 @@ def train_deepfm():
     num_sparse_fields = 10
     embedding_dim = 32
     batch_size = 4096
-    num_epochs = 5
+    num_epochs = 1
     
     # Create model
     model = DeepFMModel(
@@ -199,7 +200,7 @@ def train_deepfm():
         max_hbm_gb_per_field=2
     )
     model = model.cuda()
-    
+    print("mode gets_all_tables", model.sparse_embeddings.get_all_tables())
     # Create optimizers
     # PyTorch optimizer for MLP layers
     pytorch_params = list(model.mlp.parameters())
@@ -243,6 +244,9 @@ def train_deepfm():
             
             loss.backward()
             backward_time = time.time() - backward_start
+            # 反向后、更新前：查看 HKV buffer 状态
+            # for i, table in enumerate(model.sparse_embeddings.get_all_tables()):
+            #     print(f' Batch {batch_idx} Field {i} pending_grads (post-backward):', table.get_pending_gradient_count())
             # Update
             pytorch_optimizer.step()
             hkv_optimizer.step()
@@ -254,7 +258,7 @@ def train_deepfm():
             if batch_idx % 25 == 0:
                 print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}, "
                       f"Forward: {forward_time*1000:.2f}ms, "
-                      f"Backward: {(backward_start-forward_start)*1000:.2f}ms, "
+                      f"Backward: {(backward_time)*1000:.2f}ms, "
                       f"Total: {batch_time*1000:.2f}ms")
         
         avg_loss = total_loss / num_batches
