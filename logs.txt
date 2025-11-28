@@ -6,17 +6,13 @@ Initial stats: {'current_size': 0, 'max_capacity': 10000, 'current_capacity': 10
 Traceback (most recent call last):
   File "/home/work/data/wtorchs/hkv-python-binding/examples/training_example.py", line 467, in <module>
     test_gradient_flow()
-  File "/home/work/data/wtorchs/hkv-python-binding/examples/training_example.py", line 389, in test_gradient_flow
-    embeddings = embedding(indices)
-                 ^^^^^^^^^^^^^^^^^^
-  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/hkv_embedding/hkvembedding.py", line 313, in forward
-    embeddings.register_hook(_gradient_hook)
-  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/_tensor.py", line 621, in register_hook
-    raise RuntimeError(
-RuntimeError: cannot register a hook on a tensor that doesn't require gradient
+  File "/home/work/data/wtorchs/hkv-python-binding/examples/training_example.py", line 393, in test_gradient_flow
+    loss.backward()
+  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/_tensor.py", line 581, in backward
+    torch.autograd.backward(
+  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/autograd/__init__.py", line 347, in backward
+    _engine_run_backward(
+  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/autograd/graph.py", line 825, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Function HKVEmbeddingFunctionBackward returned an invalid gradient at index 0 - expected device cpu but got cuda:0

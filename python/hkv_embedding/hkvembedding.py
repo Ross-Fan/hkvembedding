@@ -219,9 +219,16 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         if grad_output is not None:
             embedding_layer._accumulate_gradients(indices, grad_output)
         
-        # 返回梯度：dummy_input需要返回一个梯度（虽然不会被使用），
+        # 返回梯度：确保返回正确设备上的张量
+        # dummy_input需要返回一个与输入相同设备的零梯度张量
+        if grad_output is not None:
+            dummy_grad = torch.zeros_like(embedding_layer._grad_dummy, 
+                                        device=grad_output.device)
+        else:
+            dummy_grad = None
+
         # indices不需要梯度，embedding_layer也不需要
-        return grad_output.new_zeros(1), None, None
+        return dummy_grad, None, None
 
 
 class HierarchicalHashEmbedding(nn.Module):
@@ -292,7 +299,7 @@ class HierarchicalHashEmbedding(nn.Module):
         
         # Register dummy parameter for gradient flow in autograd.Function
         # This tensor enables the backward pass to be triggered
-        self._grad_dummy = nn.Parameter(torch.zeros(1), requires_grad=True)
+        self._grad_dummy = nn.Parameter(torch.zeros(1, device=self.device), requires_grad=True)
     
     def forward(self, indices):
         """
@@ -309,6 +316,10 @@ class HierarchicalHashEmbedding(nn.Module):
 
         original_shape = indices.shape
         indices_flat = indices.flatten()
+
+        # 确保dummy参数在正确的设备上
+        if self._grad_dummy.device != self.device:
+            self._grad_dummy = self._grad_dummy.to(self.device)
         
         # 使用自定义autograd函数，传入dummy参数以启用梯度流
         embeddings = HKVEmbeddingFunction.apply(self._grad_dummy, indices_flat, self)
@@ -384,6 +395,12 @@ class HierarchicalHashEmbedding(nn.Module):
         if grad_output is None or indices.numel() == 0:
             return
         
+        # 确保张量在正确的设备上
+        if indices.device != self.device:
+            indices = indices.to(self.device)
+        if grad_output.device != self.device:
+            grad_output = grad_output.to(self.device)
+
         # Convert to numpy for HKV
         indices_np = indices.cpu().numpy().astype(np.uint64)
         grad_np = grad_output.detach().cpu().numpy().astype(np.float32)
