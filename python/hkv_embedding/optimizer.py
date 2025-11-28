@@ -144,10 +144,14 @@ class HKVAdamOptimizer:
             # Get Adam states (m, v) from GPU-backed buffer
             state_buffer = self.state_buffers[idx]
             m_prev, v_prev = state_buffer.get_states(valid_keys)
-            
+            # Ensure numerical sanity
+            m_prev = np.nan_to_num(m_prev, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+            v_prev = np.nan_to_num(v_prev, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+            valid_grads = np.nan_to_num(valid_grads, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
             # Update biased first moment estimate
             m_new = beta1 * m_prev + (1 - beta1) * valid_grads
-            
+
             # Update biased second raw moment estimate
             v_new = beta2 * v_prev + (1 - beta2) * (valid_grads ** 2)
             
@@ -157,9 +161,15 @@ class HKVAdamOptimizer:
             # Compute bias-corrected estimates
             m_hat = m_new / (1 - beta1 ** self.step_count)
             v_hat = v_new / (1 - beta2 ** self.step_count)
-            
-            # Compute update
-            update = self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+
+            # Numeric guards: ensure v_hat non-negative to avoid sqrt of negative
+            v_hat = np.maximum(v_hat, 0.0)
+
+            # Compute update safely
+            denom = np.sqrt(v_hat) + self.eps
+            # Avoid division by zero
+            denom = np.where(denom == 0.0, self.eps, denom)
+            update = self.lr * m_hat / denom
             
             # Apply update: embedding = embedding - update
             updated_embeddings = current_embeddings - update

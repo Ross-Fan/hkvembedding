@@ -1,18 +1,37 @@
-$ python3 examples/training_example.py 
+$ python3 examples/training_example.py --example deepfm
 ============================================================
-Testing HKV Embedding Gradient Flow
+Training DeepFM with HKV Embedding
 ============================================================
-Initial stats: {'current_size': 0, 'max_capacity': 10000, 'current_capacity': 1024, 'hit_count': 0, 'miss_count': 0, 'total_queries': 0, 'hit_rate': 0, 'load_factor': 0.0, 'embedding_dim': 16, 'pending_gradients': 0, 'learning_rate': 0.1, 'weight_decay': 0.0}
-Traceback (most recent call last):
-  File "/home/work/data/wtorchs/hkv-python-binding/examples/training_example.py", line 467, in <module>
-    test_gradient_flow()
-  File "/home/work/data/wtorchs/hkv-python-binding/examples/training_example.py", line 393, in test_gradient_flow
-    loss.backward()
-  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/_tensor.py", line 581, in backward
-    torch.autograd.backward(
-  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/autograd/__init__.py", line 347, in backward
-    _engine_run_backward(
-  File "/home/work/miniconda3/envs/wtorch/lib/python3.11/site-packages/torch/autograd/graph.py", line 825, in _engine_run_backward
-    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: Function HKVEmbeddingFunctionBackward returned an invalid gradient at index 0 - expected device cpu but got cuda:0
+Epoch 0, Batch 0, Loss: 1.1690, Forward: 103.16ms, Backward: 111.74ms, Total: 255.17ms
+Epoch 0, Batch 25, Loss: 40225404.0000, Forward: 12.05ms, Backward: 12.16ms, Total: 88.14ms
+Epoch 0, Batch 50, Loss: 64378216.0000, Forward: 11.99ms, Backward: 12.08ms, Total: 87.75ms
+Epoch 0, Batch 75, Loss: 98842944.0000, Forward: 12.73ms, Backward: 12.85ms, Total: 91.51ms
+Epoch 0 completed. Average Loss: 65706801.1739
+  Field 0: 401458 entries, hit_rate: 1.99%, pending_grads: 0
+  Field 1: 401492 entries, hit_rate: 1.98%, pending_grads: 0
+  Field 2: 401524 entries, hit_rate: 1.97%, pending_grads: 0
+  Field 3: 401486 entries, hit_rate: 1.98%, pending_grads: 0
+  Field 4: 401246 entries, hit_rate: 2.04%, pending_grads: 0
+  Field 5: 401432 entries, hit_rate: 1.99%, pending_grads: 0
+  Field 6: 401421 entries, hit_rate: 2.00%, pending_grads: 0
+  Field 7: 401312 entries, hit_rate: 2.02%, pending_grads: 0
+  Field 8: 401359 entries, hit_rate: 2.01%, pending_grads: 0
+  Field 9: 401331 entries, hit_rate: 2.02%, pending_grads: 0
+Epoch 1, Batch 0, Loss: 117701408.0000, Forward: 12.75ms, Backward: 12.85ms, Total: 91.29ms
+Epoch 1, Batch 25, Loss: 174909584.0000, Forward: 12.67ms, Backward: 12.79ms, Total: 88.87ms
+Epoch 1, Batch 50, Loss: 364574976.0000, Forward: 12.32ms, Backward: 12.42ms, Total: 85.89ms
+Epoch 1, Batch 75, Loss: 367948640.0000, Forward: 12.17ms, Backward: 12.28ms, Total: 85.80ms
+Epoch 1 completed. Average Loss: 314770271.5200
+  Field 0: 786829 entries, hit_rate: 3.95%, pending_grads: 0
+  Field 1: 786940 entries, hit_rate: 3.94%, pending_grads: 0
+  Field 2: 786675 entries, hit_rate: 3.97%, pending_grads: 0
+  Field 3: 787021 entries, hit_rate: 3.93%, pending_grads: 0
+  Field 4: 786342 entries, hit_rate: 4.01%, pending_grads: 0
+  Field 5: 786787 entries, hit_rate: 3.96%, pending_grads: 0
+  Field 6: 786687 entries, hit_rate: 3.97%, pending_grads: 0
+  Field 7: 786690 entries, hit_rate: 3.97%, pending_grads: 0
+  Field 8: 786437 entries, hit_rate: 4.00%, pending_grads: 0
+  Field 9: 786667 entries, hit_rate: 3.97%, pending_grads: 0
+Epoch 2, Batch 0, Loss: 561047808.0000, Forward: 12.71ms, Backward: 12.84ms, Total: 88.10ms
+Epoch 2, Batch 25, Loss: 628074880.0000, Forward: 12.40ms, Backward: 12.50ms, Total: 87.29ms
+Epoch 2, Batch 50, Loss: 748195072.0000, Forward: 12.22ms, Backward: 12.32ms, Total: 86.62ms

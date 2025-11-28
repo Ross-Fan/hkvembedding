@@ -152,12 +152,30 @@ class AdamStateBuffer:
                     np.array([]).reshape(0, self.embedding_dim))
         
         batch_size = len(keys)
-        
-        m_data, _ = self.m_table.find_or_insert(keys)
-        v_data, _ = self.v_table.find_or_insert(keys)
-        
-        return (m_data.reshape(batch_size, self.embedding_dim),
-                v_data.reshape(batch_size, self.embedding_dim))
+        # Retrieve data and found flags, ensure new keys get zero initialization
+        m_data, m_found = self.m_table.find_or_insert(keys)
+        v_data, v_found = self.v_table.find_or_insert(keys)
+
+        # Reshape arrays
+        m_arr = m_data.reshape(batch_size, self.embedding_dim).astype(np.float32)
+        v_arr = v_data.reshape(batch_size, self.embedding_dim).astype(np.float32)
+
+        # For keys not previously present, ensure moments are zero
+        if not np.all(m_found):
+            missing_idx = np.where(~m_found)[0]
+            if missing_idx.size > 0:
+                m_arr[missing_idx, :] = 0.0
+
+        if not np.all(v_found):
+            missing_idx = np.where(~v_found)[0]
+            if missing_idx.size > 0:
+                v_arr[missing_idx, :] = 0.0
+
+        # Guard against NaNs or negative values
+        m_arr = np.nan_to_num(m_arr, nan=0.0, posinf=0.0, neginf=0.0)
+        v_arr = np.nan_to_num(v_arr, nan=0.0, posinf=0.0, neginf=0.0)
+
+        return (m_arr, v_arr)
     
     def update_states(self, keys: np.ndarray, m_new: np.ndarray, v_new: np.ndarray):
         """Update m and v states for keys."""

@@ -4,7 +4,7 @@ HKV Embedding Training Example
 Demonstrates how to use HKV Embedding with PyTorch for large-scale
 recommendation model training with billions of unique IDs.
 """
-
+import time 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -229,26 +229,33 @@ def train_deepfm():
                 for _ in range(num_sparse_fields)
             ]
             labels = torch.randint(0, 2, (batch_size,), device='cuda').float()
-            
+            batch_start_time = time.time()
             # Forward
+            forward_start = time.time()
             logits = model(sparse_indices)
+            forward_time = time.time() - forward_start
             loss = criterion(logits, labels)
             
             # Backward
+            backward_start = time.time()
             pytorch_optimizer.zero_grad()
             hkv_optimizer.zero_grad()
             
             loss.backward()
-            
+            backward_time = time.time() - backward_start
             # Update
             pytorch_optimizer.step()
             hkv_optimizer.step()
             
             total_loss += loss.item()
             num_batches += 1
+            batch_time = time.time() - batch_start_time
             
             if batch_idx % 25 == 0:
-                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}")
+                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}, "
+                      f"Forward: {forward_time*1000:.2f}ms, "
+                      f"Backward: {(backward_start-forward_start)*1000:.2f}ms, "
+                      f"Total: {batch_time*1000:.2f}ms")
         
         avg_loss = total_loss / num_batches
         print(f"Epoch {epoch} completed. Average Loss: {avg_loss:.4f}")
