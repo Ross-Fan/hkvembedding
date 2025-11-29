@@ -43,4 +43,14 @@ tensor_3d = torch.randint(0, 10, (5, 5, 5))
 unique_tensor = torch.unique(tensor_3d)
 print("Stensor_3d:", tensor_3d)
 print("Shape of tensor_3d:", tensor_3d.shape)
-print("Unique values:", unique_tensor)
+print("Unique values:", unique_tensor) 
+
+c = dict()
+c[1]=2 
+
+
+def adds(a):
+    a[2] = 2
+
+adds(c)
+print(c)

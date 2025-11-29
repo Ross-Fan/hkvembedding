@@ -6,6 +6,7 @@ import pandas as pd
 from typing import List, Tuple
 import numpy as np
 import kv_embedding
+from kv_optimizer import KVAdamOptimizer
 # import hkv_embedding
 # from hkv_embedding.optimizer import HKVOptimizer, HKVAdamOptimizer, HKVAdagrad
 
@@ -46,19 +47,20 @@ class MatrixFactorization(nn.Module):
         # self.user_embedding = nn.Embedding(num_users, embedding_dim)
         # self.item_embedding = nn.Embedding(num_items, embedding_dim)
 
-        self.user_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
-        self.item_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
+        self.single_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
+        # self.user_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
+        # self.item_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
 
-        # self.user_bias = nn.Embedding(num_users, 1)
-        # self.item_bias = nn.Embedding(num_items, 1)
-        self.user_bias = kv_embedding.KVEmbedding( 1, 0.0, 0.001)
-        self.item_bias = kv_embedding.KVEmbedding( 1, 0.0, 0.001)
+        self.user_bias = nn.Embedding(num_users, 1)
+        self.item_bias = nn.Embedding(num_items, 1)
+        # self.user_bias = kv_embedding.KVEmbedding( 1, 0.0, 0.001)
+        # self.item_bias = kv_embedding.KVEmbedding( 1, 0.0, 0.001)
         
         # Initialize embeddings
         # nn.init.normal_(self.user_embedding.weight, std=0.01)
         # nn.init.normal_(self.item_embedding.weight, std=0.01)
-        # nn.init.zeros_(self.user_bias.weight)
-        # nn.init.zeros_(self.item_bias.weight)
+        nn.init.zeros_(self.user_bias.weight)
+        nn.init.zeros_(self.item_bias.weight)
         
         self.global_bias = nn.Parameter(torch.zeros(1))
 
@@ -68,8 +70,8 @@ class MatrixFactorization(nn.Module):
     def forward(self, user_ids: torch.Tensor, item_ids: torch.Tensor) -> torch.Tensor:
         # Get embeddings
         # print("user_ids:\n", user_ids)
-        user_emb = self.user_embedding(user_ids)
-        item_emb = self.item_embedding(item_ids)
+        user_emb = self.single_embedding(user_ids)
+        item_emb = self.single_embedding(item_ids)
         
         # Get biases
         user_b = self.user_bias(user_ids).squeeze()
@@ -93,7 +95,7 @@ class MatrixFactorization(nn.Module):
         return logits
 
 def train_model(model: nn.Module, dataloader: DataLoader, optimizer: torch.optim.Optimizer, 
-                criterion: nn.Module, epochs: int = 10):
+                kv_optimizer: KVAdamOptimizer , criterion: nn.Module, epochs: int = 10):
     """
     Training function for the model
     """
@@ -104,6 +106,7 @@ def train_model(model: nn.Module, dataloader: DataLoader, optimizer: torch.optim
         total_predictions = 0
         for batch_idx, (user_ids, item_ids, ratings) in enumerate(dataloader):
             optimizer.zero_grad()
+            kv_optimizer.zero_grad()
             
             # Forward pass
             logits = model(user_ids, item_ids)
@@ -123,7 +126,7 @@ def train_model(model: nn.Module, dataloader: DataLoader, optimizer: torch.optim
             #     print(f'Item embedding gradients sample: {item_emb_grad[:5]}')  # First 5 rows
             
             optimizer.step()
-            
+            kv_optimizer.step()
             total_loss += loss.item()
 
             # 计算准确率
@@ -161,9 +164,10 @@ def main():
     # Define loss function and optimizer
     criterion =  nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    kv_optimizer = KVAdamOptimizer(model.single_embedding, lr=0.001, beta1=0.9, beta2=0.999)
     
     # Train the model
-    train_model(model, dataloader, optimizer, criterion, epochs=1)
+    train_model(model, dataloader, optimizer, kv_optimizer, criterion, epochs=1)
 
 if __name__ == "__main__":
     main()

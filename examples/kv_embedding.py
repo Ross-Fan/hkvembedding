@@ -2,7 +2,7 @@ import sys
 import torch 
 import torch.nn as nn
 from typing import List, Dict, Tuple, Union
-import numpy as np
+
 
 
 
@@ -65,7 +65,8 @@ class KVEmbedding(nn.Module):
         self.beta2 = kwargs.get('beta2', 0.999)
         self.epsilon = kwargs.get('epsilon', 1e-8)
         self.weight_decay = kwargs.get('weight_decay', 0.0)
-
+        
+        self._grad_accumulator = {}
 
     def _init_vector(self,) -> torch.Tensor:
         return torch.nn.init.normal_(torch.empty(self.embedding_dim), mean= self.init_mean, std=self.init_std)
@@ -97,40 +98,19 @@ class KVEmbedding(nn.Module):
                 # if key not in self._grad_accumulator:
                 #     self._grad_accumulator[key] = torch.zeros_like(grad_for_key)
                 # self._grad_accumulator[key] += grad_for_key
-
-                # Apply weight decay if specified
-                if self.weight_decay > 0:
-                    grad_for_key = grad_for_key + self.weight_decay * self.embedding[key]
+                self._grad_accumulator[key] = grad_for_key
                 
+    def _clear_gradients(self):
+        self._grad_accumulator.clear()
 
-                if key not in self._momentum_state:
-                    first_momentum = torch.zeros_like(self.embedding[key])
-                    second_momentum = torch.zeros_like(self.embedding[key])
-                    time_step = 0
-                    self._momentum_state[key] = (first_momentum, second_momentum, time_step)
-                # Retrieve momentum state
-                first_momentum, second_momentum, time_step = self._momentum_state[key]
-                
-                # Update time step
-                time_step += 1
-
-                # Update biased first moment estimate
-                first_momentum = self.beta1 * first_momentum + (1 - self.beta1) * grad_for_key
-                
-                # Update biased second raw moment estimate
-                second_momentum = self.beta2 * second_momentum + (1 - self.beta2) * (grad_for_key ** 2)
-                
-                # Compute bias-corrected first moment estimate
-                m_hat = first_momentum / (1 - self.beta1 ** time_step)
-                
-                # Compute bias-corrected second raw moment estimate
-                v_hat = second_momentum / (1 - self.beta2 ** time_step)
-
-                self.embedding[key] -= self.learning_rate * m_hat / (torch.sqrt(v_hat) + self.epsilon)
-
-                self._momentum_state[key] = (first_momentum, second_momentum,time_step)
-
-                
+    def _debug_grad_print(self):
+        print(f'Gradient - Shape: {grad.shape}, Norm: {grad.norm().item():.6f}')
+        cnt = 0
+        for key, grad in self._grad_accumulator.items():
+            print(f'Gradient for key {key}: {grad}')
+            cnt += 1
+            if cnt > 4:
+                break            
 
     def forward(self, indices: torch.Tensor) -> torch.Tensor:
         # assume indices is a 2D tensor but could be 1D tensor or 3D tensor
