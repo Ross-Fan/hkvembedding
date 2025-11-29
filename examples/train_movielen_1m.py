@@ -43,18 +43,18 @@ class MatrixFactorization(nn.Module):
     """
     def __init__(self, num_users: int, num_items: int, embedding_dim: int = 64, num_classes: int = 5):
         super(MatrixFactorization, self).__init__()
-        self.user_embedding = nn.Embedding(num_users, embedding_dim)
-        self.item_embedding = nn.Embedding(num_items, embedding_dim)
+        # self.user_embedding = nn.Embedding(num_users, embedding_dim)
+        # self.item_embedding = nn.Embedding(num_items, embedding_dim)
 
-        # self.user_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
-        # self.item_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
+        self.user_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
+        self.item_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
 
         self.user_bias = nn.Embedding(num_users, 1)
         self.item_bias = nn.Embedding(num_items, 1)
         
         # Initialize embeddings
-        nn.init.normal_(self.user_embedding.weight, std=0.01)
-        nn.init.normal_(self.item_embedding.weight, std=0.01)
+        # nn.init.normal_(self.user_embedding.weight, std=0.01)
+        # nn.init.normal_(self.item_embedding.weight, std=0.01)
         nn.init.zeros_(self.user_bias.weight)
         nn.init.zeros_(self.item_bias.weight)
         
