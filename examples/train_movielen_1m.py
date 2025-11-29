@@ -49,14 +49,16 @@ class MatrixFactorization(nn.Module):
         self.user_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
         self.item_embedding = kv_embedding.KVEmbedding(embedding_dim, 0.0, 0.001)
 
-        self.user_bias = nn.Embedding(num_users, 1)
-        self.item_bias = nn.Embedding(num_items, 1)
+        # self.user_bias = nn.Embedding(num_users, 1)
+        # self.item_bias = nn.Embedding(num_items, 1)
+        self.user_bias = kv_embedding.KVEmbedding( 1, 0.0, 0.001)
+        self.item_bias = kv_embedding.KVEmbedding( 1, 0.0, 0.001)
         
         # Initialize embeddings
         # nn.init.normal_(self.user_embedding.weight, std=0.01)
         # nn.init.normal_(self.item_embedding.weight, std=0.01)
-        nn.init.zeros_(self.user_bias.weight)
-        nn.init.zeros_(self.item_bias.weight)
+        # nn.init.zeros_(self.user_bias.weight)
+        # nn.init.zeros_(self.item_bias.weight)
         
         self.global_bias = nn.Parameter(torch.zeros(1))
 
