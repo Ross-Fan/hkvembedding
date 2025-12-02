@@ -39,6 +39,12 @@ class GradientBuffer:
         else:
             return np.array([]), valid_mask
     
+    def size(self):
+        """返回当前存储的梯度数量"""
+        try:
+            return self.grad_table.size()
+        except:
+            return 0
     def clear(self):
         """清空梯度表"""
         self.grad_table.clear()

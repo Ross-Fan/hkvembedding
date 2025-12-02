@@ -121,7 +121,8 @@ void bind_hashtable(py::module& m, const char* name) {
              },
              py::arg("max_count") = 0,
              "Export all key-value pairs. Returns (keys, embeddings)")
-        
+        .def("export_keys", &HashTableWrapper<int64_t, float, uint64_t>::export_keys,
+         "Export all keys from the hash table")
         // Statistics methods
         .def("size", &Wrapper::size,
              "Get current number of entries in the table")
