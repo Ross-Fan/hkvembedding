@@ -148,7 +148,7 @@ void bind_hashtable(py::module& m, const char* name) {
         .def_property_readonly("embedding_dim", &Wrapper::embedding_dim)
         
         // String representation
-        .def("__repr__", [](const Wrapper& self) {
+        .def("__repr__", [](Wrapper& self) {
             return "<HKV HashTable: size=" + std::to_string(self.size()) + 
                    ", capacity=" + std::to_string(self.capacity()) + 
                    ", embedding_dim=" + std::to_string(self.embedding_dim()) + ">";
