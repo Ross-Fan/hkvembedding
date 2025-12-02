@@ -242,6 +242,8 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         """
         Backward pass - accumulates gradients in GPU-backed buffer.
         """
+        print("grad_output:", grad_output)
+        print("grad_output shape:", grad_output.shape)
         indices, unique_indices, inverse_indices = ctx.saved_tensors
         embedding_layer = ctx.embedding_layer
         
@@ -249,16 +251,8 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         if grad_output is not None:
             embedding_layer._accumulate_gradients(indices, grad_output)
         
-        # 返回梯度：确保返回正确设备上的张量
-        # dummy_input需要返回一个与输入相同设备的零梯度张量
-        if grad_output is not None:
-            dummy_grad = torch.zeros_like(embedding_layer._grad_dummy, 
-                                        device=grad_output.device)
-        else:
-            dummy_grad = None
-
         # indices不需要梯度，embedding_layer也不需要
-        return dummy_grad, None, None
+        return embedding_layer._grad_dummy, None, None
 
 
 class HierarchicalHashEmbedding(nn.Module):

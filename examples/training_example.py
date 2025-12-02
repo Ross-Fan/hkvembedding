@@ -186,9 +186,9 @@ def train_deepfm():
     print("=" * 60)
     
     # Model config
-    num_sparse_fields = 120
+    num_sparse_fields = 10
     embedding_dim = 32
-    batch_size = 4096
+    batch_size = 4
     num_epochs = 1
     
     # Create model
