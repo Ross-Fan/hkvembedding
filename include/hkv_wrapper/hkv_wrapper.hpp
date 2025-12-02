@@ -132,9 +132,9 @@ public:
     std::vector<K> export_keys();
     
     // Statistics
-    size_t size() const;
+    size_t size();
     size_t capacity() const;
-    double load_factor() const;
+    double load_factor();
     size_t embedding_dim() const { return embedding_dim_; }
     
     // Memory management

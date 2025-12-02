@@ -392,31 +392,36 @@ std::vector<K> HashTableWrapper<K, V, S>::export_keys() {
     ensure_initialized();
     
     try {
+        cudaStream_t stream = stream_pool_->get();
+        
         // Get table size
-        size_t table_size = table_->size();
+        size_t table_size = table_->size(stream);
+        cudaStreamSynchronize(stream);
+        
         if (table_size == 0) {
             return std::vector<K>();
         }
-        
+
         // Allocate buffers
         std::vector<K> keys(table_size);
         K* d_keys;
+        V* d_vectors;
+        S* d_scores = nullptr;
         cudaMalloc(&d_keys, table_size * sizeof(K));
+        cudaMalloc(&d_vectors, table_size * embedding_dim_ * sizeof(V));
         
-        cudaStream_t stream = stream_pool_->get();
-        
-        // Export keys from HKV table
-        size_t actual_size = 0;
-        table_->export_batch(table_->capacity(), 0, d_keys, nullptr, nullptr, stream);
+        // Export using HKV's export_batch (和 export_all 一样的调用方式)
+        table_->export_batch(table_->capacity(), 0, d_keys, d_vectors, d_scores, stream);
         
         // Copy back to host
-        cudaMemcpyAsync(keys.data(), d_keys, actual_size * sizeof(K), 
+        cudaMemcpyAsync(keys.data(), d_keys, table_size * sizeof(K), 
                        cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
         
         cudaFree(d_keys);
+        cudaFree(d_vectors);
         
-        keys.resize(actual_size);
+        // keys.resize(actual_size);
         return keys;
         
     } catch (const std::exception& e) {
@@ -426,7 +431,7 @@ std::vector<K> HashTableWrapper<K, V, S>::export_keys() {
 
 
 template<typename K, typename V, typename S>
-size_t HashTableWrapper<K, V, S>::size() const {
+size_t HashTableWrapper<K, V, S>::size() {
     ensure_initialized();
     
     cudaStream_t stream;
@@ -445,7 +450,7 @@ size_t HashTableWrapper<K, V, S>::capacity() const {
 }
 
 template<typename K, typename V, typename S>
-double HashTableWrapper<K, V, S>::load_factor() const {
+double HashTableWrapper<K, V, S>::load_factor() {
     ensure_initialized();
     
     cudaStream_t stream;
