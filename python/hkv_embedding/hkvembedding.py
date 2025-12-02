@@ -242,7 +242,7 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         """
         Backward pass - accumulates gradients in GPU-backed buffer.
         """
-        indices, = ctx.saved_tensors
+        indices, unique_indices, inverse_indices = ctx.saved_tensors
         embedding_layer = ctx.embedding_layer
         
         # 累积梯度到GPU缓冲区
