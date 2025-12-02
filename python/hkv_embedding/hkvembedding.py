@@ -215,18 +215,25 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         Returns:
             embeddings: embedding tensor
         """
+
+        unique_indices, inverse_indices = torch.unique(indices, return_inverse=True)
         # 保存引用用于反向传播
+        ctx.save_for_backward(indices, unique_indices, inverse_indices)
         ctx.embedding_layer = embedding_layer
-        ctx.save_for_backward(indices)
 
         # 获取嵌入向量（不在autograd下执行HKV查找）
-        with torch.no_grad():
-            embeddings = embedding_layer._forward_impl(indices)
-
+        # with torch.no_grad():
+        #     embeddings = embedding_layer._forward_impl(indices)
+        unique_embeddings = []
+        for idx in unique_indices:
+            key = idx.item()
+            embedding_vector = embedding_layer.hashtable.find_or_insert(key)
+            unique_embeddings.append(embedding_vector)
         # Tie the returned tensor to the dummy_input so that autograd will
         # invoke this Function.backward. Adding a zero-valued scalar that
         # depends on dummy_input creates a dependency without changing values.
-        embeddings = embeddings + (dummy_input.sum() * 0.0)
+        unique_embeddings = torch.stack(unique_embeddings)
+        embeddings = unique_embeddings[inverse_indices] + (dummy_input.sum() * 0.0)
 
         return embeddings
     
