@@ -262,9 +262,9 @@ class HierarchicalHashEmbedding(nn.Module):
     
     def __init__(self, 
                  embedding_dim: int,
-                 max_capacity: int = 1000000,
-                 init_capacity: int = 100000,
-                 max_hbm_gb: int = 16,
+                 max_capacity: int = 1000000000,
+                 init_capacity: int = 10000000,
+                 max_hbm_gb: int = 8,
                  device: str = 'cuda',
                  dtype: torch.dtype = torch.float32,
                  init_std: float = None,
