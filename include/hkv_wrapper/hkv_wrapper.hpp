@@ -127,6 +127,9 @@ public:
     
     // Bulk export
     std::pair<std::vector<K>, std::vector<V>> export_all(size_t max_count = 0);
+
+    
+    std::vector<K> HashTableWrapper<K, V, S>::export_keys();
     
     // Statistics
     size_t size() const;
