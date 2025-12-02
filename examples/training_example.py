@@ -188,7 +188,7 @@ def train_deepfm():
     # Model config
     num_sparse_fields = 10
     embedding_dim = 32
-    batch_size = 4096
+    batch_size = 4
     num_epochs = 1
     
     # Create model
@@ -230,6 +230,7 @@ def train_deepfm():
                 for _ in range(num_sparse_fields)
             ]
             labels = torch.randint(0, 2, (batch_size,), device='cuda').float()
+            print("sparse_indices:", sparse_indices)
             batch_start_time = time.time()
             # Forward
             forward_start = time.time()
