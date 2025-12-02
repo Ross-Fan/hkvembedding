@@ -231,7 +231,7 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         # Tie the returned tensor to the dummy_input so that autograd will
         # invoke this Function.backward. Adding a zero-valued scalar that
         # depends on dummy_input creates a dependency without changing values.
-        print("unique_embeddings:", unique_embeddings)
+        # print("unique_embeddings:", unique_embeddings)
         
         embeddings = unique_embeddings[inverse_indices] + (dummy_input.sum() * 0.0)
 
