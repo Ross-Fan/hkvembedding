@@ -407,7 +407,7 @@ std::vector<K> HashTableWrapper<K, V, S>::export_keys() {
         
         // Export keys from HKV table
         size_t actual_size = 0;
-        table_->export_batch(table_size, 0, d_keys, nullptr, nullptr, &actual_size, stream);
+        table_->export_batch(table_->capacity(), 0, d_keys, nullptr, nullptr, stream);
         
         // Copy back to host
         cudaMemcpyAsync(keys.data(), d_keys, actual_size * sizeof(K), 
