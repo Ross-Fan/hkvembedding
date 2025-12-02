@@ -126,6 +126,9 @@ class HKVAdamOptimizer:
             
             # Get averaged gradients
             avg_grads, valid_mask = embedding.grad_buffer.get_averaged_gradients(pending_keys)
+            # avg_grads, valid_mask = embedding.grad_buffer.get_averaged_gradients(
+            #     np.array(pending_keys)
+            # )
             
             if not valid_mask.any():
                 embedding.zero_grad()

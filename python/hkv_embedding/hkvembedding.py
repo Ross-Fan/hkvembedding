@@ -6,103 +6,42 @@ from . import hkv_core
 
 
 class GradientBuffer:
-    """
-    GPU-backed gradient buffer using HKV for scalable gradient accumulation.
-    Stores gradients directly in GPU memory via HKV hash table.
-    """
+    """简化版：只用于从 HKV grad_table 查询梯度"""
     
-    def __init__(self, embedding_dim: int, max_capacity: int, max_hbm_gb: int = 1):
-        """
-        Initialize GPU-backed gradient buffer.
-        
-        Args:
-            embedding_dim: Dimension of embeddings (and gradients)
-            max_capacity: Maximum number of unique keys to track
-            max_hbm_gb: Maximum HBM for gradient storage
-        """
+    def __init__(self, grad_table, embedding_dim):
+        self.grad_table = grad_table
         self.embedding_dim = embedding_dim
-        # Store gradients: each entry is [grad (dim), count (1)] = dim + 1
-        self.grad_dim = embedding_dim + 1  # extra dimension for count
-        
-        try:
-            self.grad_table = hkv_core.HashTable(
-                max_capacity // 10,  # init capacity
-                max_capacity,
-                self.grad_dim,
-                max_hbm_gb
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to create gradient buffer: {e}")
-        
-        self._pending_keys = set()  # Track which keys have gradients
     
-    def accumulate(self, keys: np.ndarray, gradients: np.ndarray):
-        """
-        Accumulate gradients for given keys on GPU.
-        
-        Args:
-            keys: uint64 array of keys
-            gradients: float32 array of gradients [N, embedding_dim]
-        """
-        if len(keys) == 0:
-            return
-        
-        batch_size = len(keys)
-        
-        # Get existing gradients (or zeros for new keys)
-        existing_data, _ = self.grad_table.find_or_insert(keys)
-        existing_data = existing_data.reshape(batch_size, self.grad_dim)
-        
-        # Split into gradients and counts
-        existing_grads = existing_data[:, :self.embedding_dim]
-        existing_counts = existing_data[:, -1:]
-        
-        # Accumulate new gradients and increment counts
-        new_grads = existing_grads + gradients.reshape(batch_size, self.embedding_dim)
-        new_counts = existing_counts + 1.0
-        
-        # Combine and update
-        new_data = np.concatenate([new_grads, new_counts], axis=1).astype(np.float32)
-        self.grad_table.insert_or_assign(keys, new_data.flatten())
-        
-        # Track keys
-        self._pending_keys.update(keys.tolist())
+    def get_all_pending_keys(self):
+        """获取所有有梯度的 keys"""
+        # 从 HKV grad_table 导出所有 keys
+        return self.grad_table.export_keys()
     
-    def get_averaged_gradients(self, keys: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def get_averaged_gradients(self, keys):
         """
-        Get averaged gradients for keys.
+        获取指定 keys 的梯度（已经是平均后的）
         
         Returns:
-            Tuple of (averaged_gradients, valid_mask)
+            grads: [N, embedding_dim] numpy array
+            valid_mask: [N] bool array
         """
         if len(keys) == 0:
-            return np.array([]).reshape(0, self.embedding_dim), np.array([], dtype=bool)
+            return np.array([]), np.array([])
         
-        batch_size = len(keys)
-        data, found = self.grad_table.find(keys)
-        data = data.reshape(batch_size, self.grad_dim)
+        # 从 grad_table 查询
+        grads_flat, found_flags = self.grad_table.find(keys.tolist())
         
-        grads = data[:, :self.embedding_dim]
-        counts = data[:, -1:].clip(min=1.0)  # Avoid division by zero
+        valid_mask = np.array(found_flags, dtype=bool)
         
-        averaged = grads / counts
-        valid = found & (data[:, -1] > 0)
-        
-        return averaged.astype(np.float32), valid
-    
-    def get_all_pending_keys(self) -> np.ndarray:
-        """Get all keys with pending gradients."""
-        return np.array(list(self._pending_keys), dtype=np.uint64)
+        if valid_mask.any():
+            grads = np.array(grads_flat).reshape(-1, self.embedding_dim)
+            return grads, valid_mask
+        else:
+            return np.array([]), valid_mask
     
     def clear(self):
-        """Clear all accumulated gradients."""
+        """清空梯度表"""
         self.grad_table.clear()
-        self._pending_keys.clear()
-    
-    def size(self) -> int:
-        """Get number of keys with gradients."""
-        return len(self._pending_keys)
-
 
 class AdamStateBuffer:
     """
@@ -249,7 +188,32 @@ class HKVEmbeddingFunction(torch.autograd.Function):
         
         # 累积梯度到GPU缓冲区
         if grad_output is not None:
-            embedding_layer._accumulate_gradients(indices, grad_output)
+            # embedding_layer._accumulate_gradients(indices, grad_output)
+            # 1. 聚合重复 ID 的梯度（已经是平均后的）
+            num_unique = unique_indices.size(0)
+            aggregated = torch.zeros(
+                num_unique, grad_output.size(1),
+                dtype=grad_output.dtype, device=grad_output.device
+            )
+            aggregated.scatter_add_(
+                0, 
+                inverse_indices.unsqueeze(1).expand_as(grad_output), 
+                grad_output
+            )
+            
+            # 2. 计算平均梯度
+            counts = torch.bincount(inverse_indices, minlength=num_unique).unsqueeze(1).float()
+            aggregated = aggregated / counts
+            
+            # 3. 转换为 numpy 并存储到 grad_table
+            keys_np = unique_indices.cpu().numpy()
+            grads_np = aggregated.cpu().numpy()
+            
+            # 4. 直接写入 grad_table（不累积，因为已经聚合过）
+            embedding_layer.grad_table.insert_or_assign(
+                keys_np.tolist(), 
+                grads_np.flatten().tolist()
+            )
         
         # indices不需要梯度，embedding_layer也不需要
         return embedding_layer._grad_dummy, None, None
@@ -308,12 +272,17 @@ class HierarchicalHashEmbedding(nn.Module):
         except Exception as e:
             raise RuntimeError(f"Failed to create HashTable: {e}")
         
-        # GPU-backed gradient buffer (replaces Python dict)
-        self.grad_buffer = GradientBuffer(
-            embedding_dim=embedding_dim,
+        # Gradient table (存储聚合后的梯度)
+        self.grad_table = hkv_core.HashTable(
+            init_capacity=min(1000000, max_capacity),
             max_capacity=max_capacity,
-            max_hbm_gb=grad_buffer_hbm_gb
+            embedding_dim=embedding_dim,
+            max_hbm_gb=1  # 梯度表通常不需要太大
         )
+
+        # 简化的 gradient buffer
+        self.grad_buffer = GradientBuffer(self.grad_table, embedding_dim)
+    
         
         # Statistics
         self.hit_count = 0
@@ -410,7 +379,7 @@ class HierarchicalHashEmbedding(nn.Module):
         
         return embeddings
     
-    def _accumulate_gradients(self, indices: torch.Tensor, grad_output: torch.Tensor):
+    def _accumulate_gradients(self, indices: torch.Tensor, unique_indices: torch.Tensor, inverse_indices: torch.Tensor, grad_output: torch.Tensor):
         """
         Accumulate gradients using GPU-backed buffer.
         
@@ -421,31 +390,27 @@ class HierarchicalHashEmbedding(nn.Module):
         if grad_output is None or indices.numel() == 0:
             return
         
-        # 确保张量在正确的设备上
-        if indices.device != self.device:
-            indices = indices.to(self.device)
-        if grad_output.device != self.device:
-            grad_output = grad_output.to(self.device)
+        # 2. 统计每个 unique index 出现的次数
+        counts = torch.bincount(inverse_indices, minlength=unique_indices.size(0))
 
-        # 打印梯度信息用于调试
-        if hasattr(self, '_debug_print') and self._debug_print:
-            print(f"Indices shape: {indices.shape}, Grad output shape: {grad_output.shape}")
-            print(f"Grad output stats - Min: {grad_output.min().item():.6f}, "
-                f"Max: {grad_output.max().item():.6f}, "
-                f"Mean: {grad_output.mean().item():.6f}, "
-                f"Std: {grad_output.std().item():.6f}")
-            
-            # 打印前几个梯度值的样本
-            if grad_output.numel() > 0:
-                sample_grads = grad_output.flatten()[:10]
-                print(f"Sample gradients: {sample_grads.tolist()}")
-            
-            # 检查是否有异常值
-            if torch.isnan(grad_output).any():
-                print("WARNING: NaN detected in gradients!")
-            if torch.isinf(grad_output).any():
-                print("WARNING: Inf detected in gradients!")
+        # 3. 使用 scatter_add 累加梯度
+        aggregated_grads = torch.zeros(
+            unique_indices.size(0), 
+            grad_output.size(1),
+            dtype=grad_output.dtype,
+            device=grad_output.device
+        )
+        
+        aggregated_grads.scatter_add_(
+            0, 
+            inverse_indices.unsqueeze(1).expand_as(grad_output),
+            grad_output
+        )
 
+        # 4. 计算平均梯度
+        aggregated_grads = aggregated_grads / counts.unsqueeze(1).float()
+    
+        
         # Convert to numpy for HKV
         indices_np = indices.cpu().numpy().astype(np.uint64)
         grad_np = grad_output.detach().cpu().numpy().astype(np.float32)
@@ -533,7 +498,7 @@ class HierarchicalHashEmbedding(nn.Module):
     
     def zero_grad(self):
         """Clear gradients (like optimizer.zero_grad())."""
-        self.grad_buffer.clear()
+        self.grad_table.clear()
     
     def get_pending_gradient_count(self) -> int:
         """Get number of keys with pending gradients."""

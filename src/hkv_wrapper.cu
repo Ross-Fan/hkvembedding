@@ -388,6 +388,44 @@ HashTableWrapper<K, V, S>::export_all(size_t max_count) {
 }
 
 template<typename K, typename V, typename S>
+std::vector<K> HashTableWrapper<K, V, S>::export_keys() {
+    ensure_initialized();
+    
+    try {
+        // Get table size
+        size_t table_size = table_->size();
+        if (table_size == 0) {
+            return std::vector<K>();
+        }
+        
+        // Allocate buffers
+        std::vector<K> keys(table_size);
+        K* d_keys;
+        cudaMalloc(&d_keys, table_size * sizeof(K));
+        
+        cudaStream_t stream = stream_pool_->get();
+        
+        // Export keys from HKV table
+        size_t actual_size = 0;
+        table_->export_batch(table_size, 0, d_keys, nullptr, nullptr, &actual_size, stream);
+        
+        // Copy back to host
+        cudaMemcpyAsync(keys.data(), d_keys, actual_size * sizeof(K), 
+                       cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        cudaFree(d_keys);
+        
+        keys.resize(actual_size);
+        return keys;
+        
+    } catch (const std::exception& e) {
+        throw std::runtime_error("export_keys failed: " + std::string(e.what()));
+    }
+}
+
+
+template<typename K, typename V, typename S>
 size_t HashTableWrapper<K, V, S>::size() const {
     ensure_initialized();
     
