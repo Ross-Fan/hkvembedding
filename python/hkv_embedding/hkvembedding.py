@@ -29,7 +29,7 @@ class GradientBuffer:
             return np.array([]), np.array([])
         
         # 从 grad_table 查询
-        grads_flat, found_flags = self.grad_table.find(keys.tolist())
+        grads_flat, found_flags = self.grad_table.find(keys)
         
         valid_mask = np.array(found_flags, dtype=bool)
         
