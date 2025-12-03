@@ -32,12 +32,14 @@ class GradientBuffer:
         grads_flat, found_flags = self.grad_table.find(keys)
         
         valid_mask = np.array(found_flags, dtype=bool)
+
+        grads_flat = np.asarray(grads_flat, dtype=np.float32)
         
         if valid_mask.any():
-            grads = np.array(grads_flat).reshape(-1, self.embedding_dim)
+            grads = grads_flat.reshape(-1, self.embedding_dim)
             return grads, valid_mask
         else:
-            return np.array([]), valid_mask
+            return np.array([]).reshape(0, self.embedding_dim), valid_mask
     
     def size(self):
         """返回当前存储的梯度数量"""

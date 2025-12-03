@@ -124,6 +124,7 @@ class HKVAdamOptimizer:
             if len(pending_keys) == 0:
                 continue
             
+            pending_keys = np.asarray(pending_keys)
             # Get averaged gradients
             avg_grads, valid_mask = embedding.grad_buffer.get_averaged_gradients(pending_keys)
             # avg_grads, valid_mask = embedding.grad_buffer.get_averaged_gradients(
