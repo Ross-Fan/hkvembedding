@@ -9,8 +9,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import hkv_embedding
+from torch.utils.data import Dataset, DataLoader
 from hkv_embedding.optimizer import HKVOptimizer, HKVAdamOptimizer, HKVAdagrad
-
+from moviedata import MovieLensDataset
 
 class DeepFMModel(nn.Module):
     """
@@ -26,23 +27,19 @@ class DeepFMModel(nn.Module):
                  num_sparse_fields: int,
                  embedding_dim: int = 64,
                  mlp_dims: list = [256, 128, 64],
-                 max_capacity_per_field: int = 100000000,  # 100M per field
-                 max_hbm_gb_per_field: int = 4):
+                 num_classes: int = 5):
         super().__init__()
         
         self.num_sparse_fields = num_sparse_fields
         self.embedding_dim = embedding_dim
         
         # Use MultiTableHKVEmbedding for multiple feature fields
-        self.sparse_embeddings = hkv_embedding.MultiTableHKVEmbedding(
-            num_tables=num_sparse_fields,
-            embedding_dim=embedding_dim,
-            max_capacity_per_table=max_capacity_per_field,
-            init_capacity_per_table=max_capacity_per_field // 100,
-            max_hbm_gb_per_table=max_hbm_gb_per_field,
-            device='cuda',
-            shared_optimizer=True,
-            debug_print=True
+        self.sparse_embeddings = hkv_embedding.HierarchicalHashEmbedding(
+            embedding_dim = embedding_dim,
+            max_capacity = 10000000,
+            init_capacity = 1000000,
+            max_hbm_gb = 4,
+            device='cuda'
         )
         
         # FM interaction layer (no learnable parameters, just computation)
@@ -59,8 +56,11 @@ class DeepFMModel(nn.Module):
         layers.append(nn.Linear(prev_dim, 1))
         
         self.mlp = nn.Sequential(*layers)
+
+        # 分类头 - 将交互特征映射到类别分数
+        self.classifier = nn.Linear(mlp_dims[-1], num_classes) 
     
-    def forward(self, sparse_indices_list: list):
+    def forward(self, user_ids: torch.Tensor, item_ids: torch.Tensor):
         """
         Forward pass.
         
@@ -71,26 +71,28 @@ class DeepFMModel(nn.Module):
             Prediction logits
         """
         # Get embeddings for all sparse fields
-        embeddings_list = self.sparse_embeddings(sparse_indices_list)
+        user_emb = self.sparse_embeddings(user_ids)
+        item_emb = self.sparse_embeddings(item_ids)
+        # embeddings_list = self.sparse_embeddings(sparse_indices_list)
         # print(embeddings_list[:10])
         # Stack embeddings: [batch, num_fields, dim]
-        stacked = torch.stack(embeddings_list, dim=1)
-        batch_size = stacked.size(0)
+        concat_emb = torch.concat([user_emb, item_emb], dim=-1)
+        
         
         # FM component: sum of pairwise interactions
         # (sum(x))^2 - sum(x^2) / 2
-        sum_square = torch.sum(stacked, dim=1) ** 2
-        square_sum = torch.sum(stacked ** 2, dim=1)
-        fm_out = 0.5 * torch.sum(sum_square - square_sum, dim=1, keepdim=True)
+        # sum_square = torch.sum(stacked, dim=1) ** 2
+        # square_sum = torch.sum(stacked ** 2, dim=1)
+        # fm_out = 0.5 * torch.sum(sum_square - square_sum, dim=1, keepdim=True)
         
         # Deep component
-        mlp_input = stacked.view(batch_size, -1)
+        mlp_input = concat_emb
         deep_out = self.mlp(mlp_input)
         
         # Combine FM and Deep
-        logits = fm_out + deep_out
+        logits = self.classifier(deep_out)
         
-        return logits.squeeze(-1)
+        return logits
 
 
 class TwoTowerModel(nn.Module):
@@ -179,16 +181,16 @@ class TwoTowerModel(nn.Module):
         return [self.user_embedding, self.item_embedding]
 
 
-def train_deepfm():
+def train_deepfm(dataloader: DataLoader):
     """Train DeepFM model example."""
     print("=" * 60)
     print("Training DeepFM with HKV Embedding")
     print("=" * 60)
     
     # Model config
-    num_sparse_fields = 10
+    num_sparse_fields = 2
     embedding_dim = 32
-    batch_size = 4
+    batch_size = 16
     num_epochs = 1
     
     # Create model
@@ -196,8 +198,7 @@ def train_deepfm():
         num_sparse_fields=num_sparse_fields,
         embedding_dim=embedding_dim,
         mlp_dims=[128, 64, 32],
-        max_capacity_per_field=10000000,  # 10M per field
-        max_hbm_gb_per_field=2
+        
     )
     model = model.cuda()
     print("mode gets_all_tables", model.sparse_embeddings.get_all_tables())
@@ -215,7 +216,7 @@ def train_deepfm():
     )
     
     # Loss function
-    criterion = nn.MSELoss()
+    criterion = nn.CrossEntropyLoss()
     
     # Training loop
     for epoch in range(num_epochs):
@@ -223,20 +224,13 @@ def train_deepfm():
         total_loss = 0
         num_batches = 0
         
-        for batch_idx in range(100):  # 100 batches per epoch
-            # Generate random training data (simulating sparse features)
-            sparse_indices = [
-                torch.randint(0, 10000000, (batch_size,), device='cuda')
-                for _ in range(num_sparse_fields)
-            ]
-            labels = torch.randint(0, 2, (batch_size,), device='cuda').float()
-            # print("sparse_indices:", sparse_indices)
+        for batch_idx, (user_ids, item_ids, ratings) in enumerate(dataloader):  # 100 batches per epoch
             batch_start_time = time.time()
             # Forward
             forward_start = time.time()
-            logits = model(sparse_indices)
+            logits = model(user_ids, item_ids)
             forward_time = time.time() - forward_start
-            loss = criterion(logits, labels)
+            loss = criterion(logits, ratings)
             
             # Backward
             backward_start = time.time()
@@ -244,7 +238,7 @@ def train_deepfm():
             hkv_optimizer.zero_grad()
             
             loss.backward()
-            backward_time = time.time() - backward_start
+            batch_start_time = time.time() - backward_start
             # 反向后、更新前：查看 HKV buffer 状态
             # for i, table in enumerate(model.sparse_embeddings.get_all_tables()):
             #     print(f' Batch {batch_idx} Field {i} pending_grads (post-backward):', table.get_pending_gradient_count())
@@ -254,8 +248,9 @@ def train_deepfm():
             
             total_loss += loss.item()
             num_batches += 1
-            batch_time = time.time() - batch_start_time
+            backward_time = time.time() - batch_start_time
             
+            batch_time = time.time() - batch_start_time
             if batch_idx % 25 == 0:
                 print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}, "
                       f"Forward: {forward_time*1000:.2f}ms, "
@@ -469,17 +464,35 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="HKV Embedding Training Examples")
-    parser.add_argument("--example", type=str, default="gradient",
-                       choices=["gradient", "deepfm", "twotower", "billion"],
-                       help="Which example to run")
+    parser.add_argument("--file_path", type=str, default="",
+                        help="Path to the training file")
     
     args = parser.parse_args()
+
+    dataset = MovieLensDataset(args.file_path)
+
+    # Get number of unique users and items
+    num_users = dataset.data['user_id'].max() + 1
+    num_items = dataset.data['item_id'].max() + 1
     
-    if args.example == "gradient":
-        test_gradient_flow()
-    elif args.example == "deepfm":
-        train_deepfm()
-    elif args.example == "twotower":
-        train_two_tower()
-    elif args.example == "billion":
-        test_billion_scale()
+    print(f"Dataset loaded with {len(dataset)} samples")
+    print(f"Number of users: {num_users}, Number of items: {num_items}")
+    
+    # Create data loader
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+    
+
+    # parser.add_argument("--example", type=str, default="gradient",
+    #                    choices=["gradient", "deepfm", "twotower", "billion"],
+    #                    help="Which example to run")
+    
+    # args = parser.parse_args()
+    
+    # if args.example == "gradient":
+    #     test_gradient_flow()
+    # elif args.example == "deepfm":
+    #     train_deepfm()
+    # elif args.example == "twotower":
+    #     train_two_tower()
+    # elif args.example == "billion":
+    #     test_billion_scale()
