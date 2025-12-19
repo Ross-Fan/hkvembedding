@@ -236,6 +236,9 @@ def train_deepfm(dataloader: DataLoader):
         for batch_idx, (discrete_features, seq_features, labels) in enumerate(dataloader):  # 100 batches per epoch
             batch_start_time = time.time()
             # 确保所有张量都在同一个设备上 (CUDA)
+            discrete_features = {k: v.cuda() for k, v in discrete_features.items()}
+            seq_features = {k: v.cuda() for k, v in seq_features.items()}
+       
             # discrete_features = discrete_features.cuda()
             # seq_features = seq_features.cuda()
             # ratings = ratings.cuda()  # 关键修改：将 ratings 移动到 CUDA 设备
