@@ -75,7 +75,7 @@ class DeepFMModel(nn.Module):
         # Get embeddings for all sparse fields
         dis_emb_list = []
         for dis_col in discrete_features.keys():
-            dis_emb_list.append(self.sparse_embeddings(dis_col))
+            dis_emb_list.append(self.sparse_embeddings(discrete_features[dis_col]))
         
         dis_emb = torch.concat(dis_emb_list, dim=-1)
         # dis_emb = self.sparse_embeddings(discrete_features)
