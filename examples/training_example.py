@@ -34,6 +34,88 @@ class DeepFMModel(nn.Module):
         self.embedding_dim = embedding_dim
         
         # Use MultiTableHKVEmbedding for multiple feature fields
+        self.sparse_embeddings = hkv_embedding.HierarchicalHashEmbedding(
+            embedding_dim = embedding_dim,
+            max_capacity = 10000000,
+            init_capacity = 1000000,
+            max_hbm_gb = 4,
+            device='cuda'
+        )
+        # self.sparse_embeddings = nn.Embedding(num_embeddings=1000000, embedding_dim=embedding_dim)
+        
+        # FM interaction layer (no learnable parameters, just computation)
+        
+        # Deep MLP layers
+        mlp_input_dim = num_sparse_fields * embedding_dim
+        layers = []
+        prev_dim = mlp_input_dim
+        for dim in mlp_dims:
+            layers.append(nn.Linear(prev_dim, dim))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(0.1))
+            prev_dim = dim
+        # layers.append(nn.Linear(prev_dim, 1))
+        
+        self.mlp = nn.Sequential(*layers)
+
+        # 分类头 - 将交互特征映射到类别分数
+        self.classifier = nn.Linear(mlp_dims[-1], num_classes) 
+    
+    def forward(self, user_ids: torch.Tensor, item_ids: torch.Tensor):
+        """
+        Forward pass.
+        
+        Args:
+            sparse_indices_list: List of index tensors, one per sparse field
+            
+        Returns:
+            Prediction logits
+        """
+        # Get embeddings for all sparse fields
+        user_emb = self.sparse_embeddings(user_ids)
+        item_emb = self.sparse_embeddings(item_ids)
+        # embeddings_list = self.sparse_embeddings(sparse_indices_list)
+        # print(embeddings_list[:10])
+        # Stack embeddings: [batch, num_fields, dim]
+        concat_emb = torch.concat([user_emb, item_emb], dim=-1)
+        
+        
+        # FM component: sum of pairwise interactions
+        # (sum(x))^2 - sum(x^2) / 2
+        # sum_square = torch.sum(stacked, dim=1) ** 2
+        # square_sum = torch.sum(stacked ** 2, dim=1)
+        # fm_out = 0.5 * torch.sum(sum_square - square_sum, dim=1, keepdim=True)
+        
+        # Deep component
+        mlp_input = concat_emb
+        deep_out = self.mlp(mlp_input)
+        
+        # Combine FM and Deep
+        logits = self.classifier(deep_out)
+        
+        return logits
+
+class DeepFMModel2(nn.Module):
+    """
+    DeepFM-style model using HKV Embedding for sparse features.
+    
+    Suitable for CTR prediction with:
+    - User ID (billions of possible values)
+    - Item ID (millions of possible values)
+    - Categorical features (variable cardinality)
+    """
+    
+    def __init__(self, 
+                 num_sparse_fields: int,
+                 embedding_dim: int = 64,
+                 mlp_dims: list = [256, 128, 64],
+                 num_classes: int = 5):
+        super().__init__()
+        
+        self.num_sparse_fields = num_sparse_fields
+        self.embedding_dim = embedding_dim
+        
+        # Use MultiTableHKVEmbedding for multiple feature fields
         # self.sparse_embeddings = hkv_embedding.HierarchicalHashEmbedding(
         #     embedding_dim = embedding_dim,
         #     max_capacity = 10000000,
@@ -209,12 +291,12 @@ def train_deepfm(dataloader: DataLoader):
     pytorch_optimizer = torch.optim.Adam(pytorch_params, lr=0.001)
     
     # HKV Adam optimizer for embeddings (GPU-backed states)
-    hkv_optimizer = HKVAdamOptimizer(
-        model.sparse_embeddings,
-        lr=0.001,
-        betas=(0.9, 0.999),
-        state_hbm_gb_per_embedding=1  # 1GB for Adam states per embedding
-    )
+    # hkv_optimizer = HKVAdamOptimizer(
+    #     model.sparse_embeddings,
+    #     lr=0.001,
+    #     betas=(0.9, 0.999),
+    #     state_hbm_gb_per_embedding=1  # 1GB for Adam states per embedding
+    # )
     
     # Loss function
     criterion = nn.CrossEntropyLoss()
@@ -249,7 +331,7 @@ def train_deepfm(dataloader: DataLoader):
             back_start_time = time.time()
             loss = criterion(logits, ratings)
             pytorch_optimizer.zero_grad()
-            hkv_optimizer.zero_grad()
+            # hkv_optimizer.zero_grad()
             
             loss.backward()
             
@@ -258,7 +340,7 @@ def train_deepfm(dataloader: DataLoader):
             #     print(f' Batch {batch_idx} Field {i} pending_grads (post-backward):', table.get_pending_gradient_count())
             # Update
             pytorch_optimizer.step()
-            hkv_optimizer.step()
+            # hkv_optimizer.step()
             
             total_loss += loss.item()
             num_batches += 1
