@@ -34,13 +34,14 @@ class DeepFMModel(nn.Module):
         self.embedding_dim = embedding_dim
         
         # Use MultiTableHKVEmbedding for multiple feature fields
-        self.sparse_embeddings = hkv_embedding.HierarchicalHashEmbedding(
-            embedding_dim = embedding_dim,
-            max_capacity = 10000000,
-            init_capacity = 1000000,
-            max_hbm_gb = 4,
-            device='cuda'
-        )
+        # self.sparse_embeddings = hkv_embedding.HierarchicalHashEmbedding(
+        #     embedding_dim = embedding_dim,
+        #     max_capacity = 10000000,
+        #     init_capacity = 1000000,
+        #     max_hbm_gb = 4,
+        #     device='cuda'
+        # )
+        self.sparse_embeddings = nn.Embedding(num_embeddings=1000000, embedding_dim=embedding_dim)
         
         # FM interaction layer (no learnable parameters, just computation)
         
