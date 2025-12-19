@@ -12,6 +12,7 @@ import hkv_embedding
 from torch.utils.data import Dataset, DataLoader
 from hkv_embedding.optimizer import HKVOptimizer, HKVAdamOptimizer, HKVAdagrad
 from moviedata import MovieLensDataset
+from tfrecord_dataloader import StreamingTFRecordDataset
 
 class DeepFMModel(nn.Module):
     """
@@ -36,7 +37,7 @@ class DeepFMModel(nn.Module):
         # Use MultiTableHKVEmbedding for multiple feature fields
         self.sparse_embeddings = hkv_embedding.HierarchicalHashEmbedding(
             embedding_dim = embedding_dim,
-            max_capacity = 10000000,
+            max_capacity = 100000000,
             init_capacity = 1000000,
             max_hbm_gb = 4,
             device='cuda'
@@ -61,7 +62,7 @@ class DeepFMModel(nn.Module):
         # 分类头 - 将交互特征映射到类别分数
         self.classifier = nn.Linear(mlp_dims[-1], num_classes) 
     
-    def forward(self, user_ids: torch.Tensor, item_ids: torch.Tensor):
+    def forward(self, discrete_features: torch.Tensor, sequence_features: torch.Tensor):
         """
         Forward pass.
         
@@ -72,12 +73,14 @@ class DeepFMModel(nn.Module):
             Prediction logits
         """
         # Get embeddings for all sparse fields
-        user_emb = self.sparse_embeddings(user_ids)
-        item_emb = self.sparse_embeddings(item_ids)
+        dis_emb = self.sparse_embeddings(discrete_features)
+        seq_emb = self.sparse_embeddings(sequence_features)
+        print("dis_emb", dis_emb.shape)
+        print("seq_emb", seq_emb.shape)
         # embeddings_list = self.sparse_embeddings(sparse_indices_list)
         # print(embeddings_list[:10])
         # Stack embeddings: [batch, num_fields, dim]
-        concat_emb = torch.concat([user_emb, item_emb], dim=-1)
+        # concat_emb = torch.concat([user_emb, item_emb], dim=-1)
         
         
         # FM component: sum of pairwise interactions
@@ -87,11 +90,11 @@ class DeepFMModel(nn.Module):
         # fm_out = 0.5 * torch.sum(sum_square - square_sum, dim=1, keepdim=True)
         
         # Deep component
-        mlp_input = concat_emb
-        deep_out = self.mlp(mlp_input)
+        # mlp_input = concat_emb
+        # deep_out = self.mlp(mlp_input)
         
         # Combine FM and Deep
-        logits = self.classifier(deep_out)
+        logits = 0
         
         return logits
 
@@ -227,7 +230,7 @@ def train_deepfm(dataloader: DataLoader):
         correct_predictions = 0  # 初始化正确预测计数
         total_samples = 0        # 初始化总样本数
         
-        for batch_idx, (user_ids, item_ids, ratings) in enumerate(dataloader):  # 100 batches per epoch
+        for batch_idx, (discrete_features, seq_features, labels) in enumerate(dataloader):  # 100 batches per epoch
             batch_start_time = time.time()
             # 确保所有张量都在同一个设备上 (CUDA)
             user_ids = user_ids.cuda()
@@ -484,17 +487,19 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    dataset = MovieLensDataset(args.file_path)
-
+    # dataset = MovieLensDataset(args.file_path)
+    # dataset = StreamingTFRecordDataset(args.file_path)
     # Get number of unique users and items
-    num_users = dataset.data['user_id'].max() + 1
-    num_items = dataset.data['item_id'].max() + 1
+    # num_users = dataset.data['user_id'].max() + 1
+    # num_items = dataset.data['item_id'].max() + 1
     
-    print(f"Dataset loaded with {len(dataset)} samples")
-    print(f"Number of users: {num_users}, Number of items: {num_items}")
+    # print(f"Dataset loaded with {len(dataset)} samples")
+    # print(f"Number of users: {num_users}, Number of items: {num_items}")
     
     # Create data loader
-    dataloader = DataLoader(dataset, batch_size=1024, shuffle=True)
+    # dataloader = DataLoader(dataset, batch_size=1024, shuffle=True)
+    dataloader = StreamingTFRecordDataset(args.file_path, 0, 0, batch_size=1024)
+    
     
     train_deepfm(dataloader)
     # parser.add_argument("--example", type=str, default="gradient",

@@ -118,7 +118,7 @@ class StreamingTFRecordDataset(IterableDataset):
         for batch in dataset.as_numpy_iterator():
             # 提取特征和标签
             discrete_features = {}
-            for i in range(44):  # dis_00 to dis_43
+            for i in range(51):  # dis_00 to dis_43
                 discrete_features[f'dis_{i:02d}'] = torch.tensor(batch[f'dis_{i:02d}'], dtype=torch.long)
             
             # seq_features1 = {}
