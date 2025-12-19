@@ -226,6 +226,11 @@ def train_deepfm(dataloader: DataLoader):
         
         for batch_idx, (user_ids, item_ids, ratings) in enumerate(dataloader):  # 100 batches per epoch
             batch_start_time = time.time()
+            # 确保所有张量都在同一个设备上 (CUDA)
+            user_ids = user_ids.cuda()
+            item_ids = item_ids.cuda()
+            ratings = ratings.cuda()  # 关键修改：将 ratings 移动到 CUDA 设备
+            
             # Forward
             forward_start = time.time()
             logits = model(user_ids, item_ids)
