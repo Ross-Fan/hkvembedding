@@ -481,7 +481,7 @@ if __name__ == "__main__":
     # Create data loader
     dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
     
-
+    train_deepfm(dataloader)
     # parser.add_argument("--example", type=str, default="gradient",
     #                    choices=["gradient", "deepfm", "twotower", "billion"],
     #                    help="Which example to run")
