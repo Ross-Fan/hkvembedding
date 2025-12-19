@@ -201,7 +201,7 @@ def train_deepfm(dataloader: DataLoader):
         
     )
     model = model.cuda()
-    print("mode gets_all_tables", model.sparse_embeddings.get_all_tables())
+    print("mode gets_all_tables", model.sparse_embeddings)
     # Create optimizers
     # PyTorch optimizer for MLP layers
     pytorch_params = list(model.mlp.parameters())
@@ -209,7 +209,7 @@ def train_deepfm(dataloader: DataLoader):
     
     # HKV Adam optimizer for embeddings (GPU-backed states)
     hkv_optimizer = HKVAdamOptimizer(
-        model.sparse_embeddings.get_all_tables(),
+        model.sparse_embeddings,
         lr=0.001,
         betas=(0.9, 0.999),
         state_hbm_gb_per_embedding=1  # 1GB for Adam states per embedding
