@@ -73,10 +73,15 @@ class DeepFMModel(nn.Module):
             Prediction logits
         """
         # Get embeddings for all sparse fields
-        dis_emb = self.sparse_embeddings(discrete_features)
-        seq_emb = self.sparse_embeddings(sequence_features)
+        dis_emb_list = []
+        for dis_col in discrete_features.keys():
+            dis_emb_list.append(self.sparse_embeddings(dis_col))
+        
+        dis_emb = torch.concat(dis_emb_list, dim=-1)
+        # dis_emb = self.sparse_embeddings(discrete_features)
+        # seq_emb = self.sparse_embeddings(sequence_features)
         print("dis_emb", dis_emb.shape)
-        print("seq_emb", seq_emb.shape)
+        # print("seq_emb", seq_emb.shape)
         # embeddings_list = self.sparse_embeddings(sparse_indices_list)
         # print(embeddings_list[:10])
         # Stack embeddings: [batch, num_fields, dim]
