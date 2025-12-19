@@ -13,6 +13,8 @@ from torch.utils.data import Dataset, DataLoader
 from hkv_embedding.optimizer import HKVOptimizer, HKVAdamOptimizer, HKVAdagrad
 from moviedata import MovieLensDataset
 from tfrecord_dataloader import StreamingTFRecordDataset
+from sklearn.metrics import roc_auc_score
+import numpy as np
 
 class DeepFMModel(nn.Module):
     """
@@ -271,9 +273,13 @@ def train_deepfm(dataloader: DataLoader):
             backward_time = time.time() - back_start_time
             
             batch_time = time.time() - batch_start_time
+
             if batch_idx % 25 == 0:
+                predictions = torch.sigmoid(logits).detach().cpu().numpy()
+                labels_np = play_click_1m.detach().cpu().numpy()
+                batch_auc = roc_auc_score(labels_np, predictions)
                 # batch_accuracy = (predicted == ratings).sum().item() / ratings.size(0)
-                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f},"
+                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}, AUC: {batch_auc:.4f},"
                       f"Forward: {forward_time*1000:.2f}ms, "
                       f"Backward: {(backward_time)*1000:.2f}ms, "
                       f"Total: {batch_time*1000:.2f}ms")
