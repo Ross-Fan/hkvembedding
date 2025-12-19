@@ -97,7 +97,7 @@ class DeepFMModel(nn.Module):
         deep_out = self.mlp(dis_emb)
         
         # Combine FM and Deep
-        logits = deep_out
+        logits = deep_out.squeeze()
         
         return logits
 
