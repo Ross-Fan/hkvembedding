@@ -53,7 +53,7 @@ class DeepFMModel(nn.Module):
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(0.1))
             prev_dim = dim
-        layers.append(nn.Linear(prev_dim, 1))
+        # layers.append(nn.Linear(prev_dim, 1))
         
         self.mlp = nn.Sequential(*layers)
 
