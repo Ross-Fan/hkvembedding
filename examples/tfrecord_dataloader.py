@@ -6,9 +6,9 @@ from torch.utils.data import IterableDataset, DataLoader
 
 
 version = sys.argv[1] if len(sys.argv) > 1 else "v1001"
-pattern1 = sys.argv[2] if len(sys.argv) > 2 else "202506"
+path = sys.argv[2] if len(sys.argv) > 2 else "202506"
 
-base_local_path = f"./sample_data_v1001/{pattern1}"
+base_local_path = path
 print("Base path:", base_local_path)
 files = []
 
