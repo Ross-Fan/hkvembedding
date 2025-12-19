@@ -576,7 +576,7 @@ if __name__ == "__main__":
     print(f"Number of users: {num_users}, Number of items: {num_items}")
     
     # Create data loader
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=1024, shuffle=True)
     
     train_deepfm(dataloader)
     # parser.add_argument("--example", type=str, default="gradient",
