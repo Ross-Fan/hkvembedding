@@ -55,12 +55,10 @@ class DeepFMModel(nn.Module):
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(0.1))
             prev_dim = dim
-        # layers.append(nn.Linear(prev_dim, 1))
+        layers.append(nn.Linear(prev_dim, 1))
         
         self.mlp = nn.Sequential(*layers)
 
-        # 分类头 - 将交互特征映射到类别分数
-        self.classifier = nn.Linear(mlp_dims[-1], num_classes) 
     
     def forward(self, discrete_features: torch.Tensor, sequence_features: torch.Tensor):
         """
@@ -80,7 +78,7 @@ class DeepFMModel(nn.Module):
         dis_emb = torch.concat(dis_emb_list, dim=-1)
         # dis_emb = self.sparse_embeddings(discrete_features)
         # seq_emb = self.sparse_embeddings(sequence_features)
-        print("dis_emb", dis_emb.shape)
+        # print("dis_emb", dis_emb.shape)
         # print("seq_emb", seq_emb.shape)
         # embeddings_list = self.sparse_embeddings(sparse_indices_list)
         # print(embeddings_list[:10])
@@ -96,10 +94,10 @@ class DeepFMModel(nn.Module):
         
         # Deep component
         # mlp_input = concat_emb
-        # deep_out = self.mlp(mlp_input)
+        deep_out = self.mlp(dis_emb)
         
         # Combine FM and Deep
-        logits = 0
+        logits = deep_out
         
         return logits
 
@@ -197,7 +195,7 @@ def train_deepfm(dataloader: DataLoader):
     print("=" * 60)
     
     # Model config
-    num_sparse_fields = 2
+    num_sparse_fields = 51
     embedding_dim = 32
     batch_size = 16
     num_epochs = 1
@@ -271,8 +269,8 @@ def train_deepfm(dataloader: DataLoader):
             
             batch_time = time.time() - batch_start_time
             if batch_idx % 25 == 0:
-                batch_accuracy = (predicted == ratings).sum().item() / ratings.size(0)
-                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f},  Accuracy: {batch_accuracy:.4f},"
+                # batch_accuracy = (predicted == ratings).sum().item() / ratings.size(0)
+                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f},"
                       f"Forward: {forward_time*1000:.2f}ms, "
                       f"Backward: {(backward_time)*1000:.2f}ms, "
                       f"Total: {batch_time*1000:.2f}ms")
