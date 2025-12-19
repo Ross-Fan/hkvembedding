@@ -4,7 +4,7 @@ HKV Embedding Training Example
 Demonstrates how to use HKV Embedding with PyTorch for large-scale
 recommendation model training with billions of unique IDs.
 """
-import time 
+import os, time 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -477,6 +477,16 @@ def test_billion_scale():
     
     print(f"Final: {embedding.get_statistics()}")
 
+def get_file_list(base_local_path: str):
+    """获取 Parquet 文件列表"""
+    files = []
+    if os.path.exists(base_local_path):
+        for d in os.listdir(base_local_path):
+            if d.endswith(".tfrecord.gz"):
+                files.append(os.path.join(base_local_path, d))
+    files.sort()
+    print(f"Found {len(files)} Parquet files.")
+    return files
 
 if __name__ == "__main__":
     import argparse
@@ -498,7 +508,8 @@ if __name__ == "__main__":
     
     # Create data loader
     # dataloader = DataLoader(dataset, batch_size=1024, shuffle=True)
-    dataloader = StreamingTFRecordDataset(args.file_path, 0, 0, batch_size=1024)
+    files = get_file_list(args.file_path)
+    dataloader = StreamingTFRecordDataset(files, 0, 0, batch_size=1024)
     
     
     train_deepfm(dataloader)
