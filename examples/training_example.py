@@ -223,7 +223,7 @@ def train_deepfm(dataloader: DataLoader):
     )
     
     # Loss function
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss()
     
     # Training loop
     for epoch in range(num_epochs):
