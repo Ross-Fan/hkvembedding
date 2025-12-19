@@ -220,7 +220,7 @@ def train_deepfm(dataloader: DataLoader):
     )
     
     # Loss function
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCELoss()
     
     # Training loop
     for epoch in range(num_epochs):
@@ -233,24 +233,21 @@ def train_deepfm(dataloader: DataLoader):
         for batch_idx, (discrete_features, seq_features, labels) in enumerate(dataloader):  # 100 batches per epoch
             batch_start_time = time.time()
             # 确保所有张量都在同一个设备上 (CUDA)
-            user_ids = user_ids.cuda()
-            item_ids = item_ids.cuda()
-            ratings = ratings.cuda()  # 关键修改：将 ratings 移动到 CUDA 设备
+            # discrete_features = discrete_features.cuda()
+            # seq_features = seq_features.cuda()
+            # ratings = ratings.cuda()  # 关键修改：将 ratings 移动到 CUDA 设备
             
             # Forward
             forward_start = time.time()
-            logits = model(user_ids, item_ids)
+            logits = model(discrete_features, seq_features)
 
-            # 计算准确率
-            _, predicted = torch.max(logits.data, 1)
-            correct_predictions += (predicted == ratings).sum().item()
-            total_samples += ratings.size(0)
+            play_click_1m = labels['play_1m_label'].to('cuda')
             forward_time = time.time() - forward_start
             
             
             # Backward
             back_start_time = time.time()
-            loss = criterion(logits, ratings)
+            loss = criterion(logits, play_click_1m)
             pytorch_optimizer.zero_grad()
             hkv_optimizer.zero_grad()
             
