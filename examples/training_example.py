@@ -34,14 +34,14 @@ class DeepFMModel(nn.Module):
         self.embedding_dim = embedding_dim
         
         # Use MultiTableHKVEmbedding for multiple feature fields
-        # self.sparse_embeddings = hkv_embedding.HierarchicalHashEmbedding(
-        #     embedding_dim = embedding_dim,
-        #     max_capacity = 10000000,
-        #     init_capacity = 1000000,
-        #     max_hbm_gb = 4,
-        #     device='cuda'
-        # )
-        self.sparse_embeddings = nn.Embedding(num_embeddings=1000000, embedding_dim=embedding_dim)
+        self.sparse_embeddings = hkv_embedding.HierarchicalHashEmbedding(
+            embedding_dim = embedding_dim,
+            max_capacity = 10000000,
+            init_capacity = 1000000,
+            max_hbm_gb = 4,
+            device='cuda'
+        )
+        # self.sparse_embeddings = nn.Embedding(num_embeddings=1000000, embedding_dim=embedding_dim)
         
         # FM interaction layer (no learnable parameters, just computation)
         
@@ -209,12 +209,12 @@ def train_deepfm(dataloader: DataLoader):
     pytorch_optimizer = torch.optim.Adam(pytorch_params, lr=0.001)
     
     # HKV Adam optimizer for embeddings (GPU-backed states)
-    # hkv_optimizer = HKVAdamOptimizer(
-    #     model.sparse_embeddings,
-    #     lr=0.001,
-    #     betas=(0.9, 0.999),
-    #     state_hbm_gb_per_embedding=1  # 1GB for Adam states per embedding
-    # )
+    hkv_optimizer = HKVAdamOptimizer(
+        model.sparse_embeddings,
+        lr=0.001,
+        betas=(0.9, 0.999),
+        state_hbm_gb_per_embedding=1  # 1GB for Adam states per embedding
+    )
     
     # Loss function
     criterion = nn.CrossEntropyLoss()
@@ -249,7 +249,7 @@ def train_deepfm(dataloader: DataLoader):
             back_start_time = time.time()
             loss = criterion(logits, ratings)
             pytorch_optimizer.zero_grad()
-            # hkv_optimizer.zero_grad()
+            hkv_optimizer.zero_grad()
             
             loss.backward()
             
@@ -258,7 +258,7 @@ def train_deepfm(dataloader: DataLoader):
             #     print(f' Batch {batch_idx} Field {i} pending_grads (post-backward):', table.get_pending_gradient_count())
             # Update
             pytorch_optimizer.step()
-            # hkv_optimizer.step()
+            hkv_optimizer.step()
             
             total_loss += loss.item()
             num_batches += 1
