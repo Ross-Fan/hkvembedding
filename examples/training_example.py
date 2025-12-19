@@ -223,6 +223,8 @@ def train_deepfm(dataloader: DataLoader):
         model.train()
         total_loss = 0
         num_batches = 0
+        correct_predictions = 0  # 初始化正确预测计数
+        total_samples = 0        # 初始化总样本数
         
         for batch_idx, (user_ids, item_ids, ratings) in enumerate(dataloader):  # 100 batches per epoch
             batch_start_time = time.time()
