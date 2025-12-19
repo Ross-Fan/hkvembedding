@@ -234,16 +234,22 @@ def train_deepfm(dataloader: DataLoader):
             # Forward
             forward_start = time.time()
             logits = model(user_ids, item_ids)
+
+            # 计算准确率
+            _, predicted = torch.max(logits.data, 1)
+            correct_predictions += (predicted == ratings).sum().item()
+            total_samples += ratings.size(0)
             forward_time = time.time() - forward_start
-            loss = criterion(logits, ratings)
+            
             
             # Backward
-            backward_start = time.time()
+            back_start_time = time.time()
+            loss = criterion(logits, ratings)
             pytorch_optimizer.zero_grad()
             hkv_optimizer.zero_grad()
             
             loss.backward()
-            batch_start_time = time.time() - backward_start
+            
             # 反向后、更新前：查看 HKV buffer 状态
             # for i, table in enumerate(model.sparse_embeddings.get_all_tables()):
             #     print(f' Batch {batch_idx} Field {i} pending_grads (post-backward):', table.get_pending_gradient_count())
@@ -253,11 +259,12 @@ def train_deepfm(dataloader: DataLoader):
             
             total_loss += loss.item()
             num_batches += 1
-            backward_time = time.time() - batch_start_time
+            backward_time = time.time() - back_start_time
             
             batch_time = time.time() - batch_start_time
             if batch_idx % 25 == 0:
-                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}, "
+                batch_accuracy = (predicted == ratings).sum().item() / ratings.size(0)
+                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f},  Accuracy: {batch_accuracy:.4f},"
                       f"Forward: {forward_time*1000:.2f}ms, "
                       f"Backward: {(backward_time)*1000:.2f}ms, "
                       f"Total: {batch_time*1000:.2f}ms")
@@ -266,11 +273,11 @@ def train_deepfm(dataloader: DataLoader):
         print(f"Epoch {epoch} completed. Average Loss: {avg_loss:.4f}")
         
         # Print embedding statistics
-        for i, table in enumerate(model.sparse_embeddings.get_all_tables()):
-            stats = table.get_statistics()
-            print(f"  Field {i}: {stats['current_size']} entries, "
-                  f"hit_rate: {stats['hit_rate']:.2%}, "
-                  f"pending_grads: {stats['pending_gradients']}")
+        # for i, table in enumerate(model.sparse_embeddings.get_all_tables()):
+        #     stats = table.get_statistics()
+        #     print(f"  Field {i}: {stats['current_size']} entries, "
+        #           f"hit_rate: {stats['hit_rate']:.2%}, "
+        #           f"pending_grads: {stats['pending_gradients']}")
 
 
 def train_two_tower():
